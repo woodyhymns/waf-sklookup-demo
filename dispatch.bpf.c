@@ -2,7 +2,7 @@
 /* sk_lookup demo: steer configured ports to one listening socket */
 #include <linux/bpf.h>
 #include <linux/in.h>
-#include <bpf/bpf_helpers.h>
+#include "bpf_helpers.h"
 
 char LICENSE[] SEC("license") = "GPL";
 
