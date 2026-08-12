@@ -1,0 +1,96 @@
+# M1 验收清单：sk_lookup → OpenResty（接线 POC）
+
+- **里程碑**: [可执行里程碑：sk_lookup → OpenResty WAF](https://app.notion.com/p/3ba6e599de1981b292abfec7ccd84417)
+- **分支**: `feat/openresty-integration`
+- **状态**: 清单就绪 · **待 Repo PR 后执行**（截止写清单时：无 open PR；分支与 main 同点）
+- **执行人**: Test（QA）
+- **总体结论**: _未跑_ — 勾选在 PR 落地后填写
+
+## 环境约束（硬性）
+
+| 项 | 要求 | 实测 / 备注 |
+|----|------|-------------|
+| OpenResty | **1.19.3.2** 基线（或明确同代 / 兼容子集；勿依赖更高版本 API） | |
+| 内核 | ≥5.9，`sk_lookup` available（`bpftool feature`） | |
+| 权限 | root 或 `CAP_BPF` + 必要 net caps | |
+| 外口变量 | **必须** `$waf_external_port`（或文档约定等价名）；**禁止**用裸 `$server_port` 当业务外口 | |
+| 非目标 | 不验收玩具 HTTP；不做 M2 热加删 API / M3 压测矩阵 | |
+
+预检命令（执行时粘贴输出）：
+
+```bash
+openresty -v 2>&1 || nginx -V 2>&1
+uname -r
+sudo bpftool feature list_builtins prog_types | rg sk_lookup
+```
+
+## 核心验收（Json 要求 · 必过）
+
+| # | 项 | 结果 | 证据（命令 / 日志摘录） |
+|---|----|------|------------------------|
+| M1-1 | **仅内听 bind；外口靠 sk_lookup** — `ss -lntp`（或等价）仅见 OpenResty **固定内听**；外口（含非标如 65500）**无** userspace `listen`/`bind` | ☐ PASS / ☐ FAIL / ☐ BLOCKED | |
+| M1-2 | **curl/外口命中真实 OpenResty** — 打已开通外口得到引擎响应（TLS/HTTP 路径来自 OpenResty），**不是** demo 玩具 HTTP（无 `sk_lookup demo OK` 玩具文案） | ☐ PASS / ☐ FAIL / ☐ BLOCKED | |
+| M1-3 | **响应或日志可见正确外口** — `$waf_external_port`（或等价）= Client 打的目的端口；至少两外口可区分（例 18081 ≠ 18082 / 65500）；**不得**误报为内听端口 | ☐ PASS / ☐ FAIL / ☐ BLOCKED | |
+| M1-4 | **负向：删 map 端口后外口失败** — `bpftool map delete`（或约定 CLI）去掉某外口后，新连接该口失败；其它仍开通口可用（约定范围内） | ☐ PASS / ☐ FAIL / ☐ BLOCKED | |
+| M1-5 | **版本备注** — 本次跑在 OpenResty **1.19.3.2**（或同代，写明实际版本字符串） | ☐ PASS / ☐ FAIL / ☐ BLOCKED | |
+
+## Notion M1 扩展勾选（对齐里程碑页）
+
+| # | 项 | 结果 | 证据 |
+|---|----|------|------|
+| M1-6 | 已开通外口（含非标）→ **TLS 握手成功**；证书 / SNI / ALPN 与「直连旧架构」观感一致（M1 至少：握手成功 + 证书来自 OpenResty） | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ N/A | |
+| M1-7 | access / Lua 日志含 **真实客户端 IP** + **`$waf_external_port`** | ☐ PASS / ☐ FAIL / ☐ BLOCKED | |
+| M1-8 | Lua WAF 规则仍生效；回源口可与监听口不同（若 PR 含 WAF 路径） | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ N/A | |
+| M1-9 | **未开通**端口：失败 / RST，无残留对外暴露 | ☐ PASS / ☐ FAIL / ☐ BLOCKED | |
+| M1-10 | 复现步骤可按 `docs/repro.md` 风格跑通（更新或附 M1 repro 段） | ☐ PASS / ☐ FAIL / ☐ BLOCKED | |
+
+## 建议执行步骤（Repo PR 就绪后）
+
+1. 检出 PR 分支；确认 OpenResty **1.19.3.2**（或同代）与 loader / 配置路径。
+2. 按 PR / README 启动：attach `sk_lookup` → 注册 OpenResty listen FD → 写入 `open_ports`。
+3. **M1-1**: `ss -lntp | rg -E '18080|18081|18082|65500|<内听>|<外口>'` — 只应有内听。
+4. **M1-2 / M1-6**: 对外口 `curl -vk https://127.0.0.1:<外口>/`（或 PR 约定 scheme）；确认响应体 / Server 头 / 证书归属 OpenResty，排除玩具文案。
+5. **M1-3 / M1-7**: 打两个不同外口；从响应头、自定义 body、或 access/Lua 日志读取 `$waf_external_port`；断言等于目的端口且 ≠ 内听。
+6. **M1-4**: `sudo bpftool map dump name open_ports` → delete 一键 → 该口 connect fail；邻口仍 200/握手成功。
+7. **M1-9**: 从未写入 map 的端口应不可达。
+8. 填写本表 + 环境表；结论 **PASS** 仅当核心五项（M1-1…5）全绿。
+9. 清理进程 / BPF attach；不 deploy、不 merge、不 page。
+
+### 负向示例（端口删除）
+
+```bash
+# 以 PR 实际 map 名 / 键格式为准（demo 曾用 open_ports，LE u16）
+sudo bpftool map dump name open_ports
+sudo bpftool map delete name open_ports key hex <port_le_bytes>
+curl -sS --max-time 3 https://127.0.0.1:<deleted_port>/   # expect fail
+```
+
+### `$waf_external_port` 断言示例
+
+```bash
+# 示例：引擎把变量打进响应头或 JSON（以 PR 为准）
+curl -sS -D- http://127.0.0.1:18081/ | rg -i 'waf.external|18081'
+# 日志侧：access_log / Lua 打印应含 external=18081，且不得写成内听端口
+```
+
+## 失败与最小修复建议（跑完再填）
+
+| 现象 | 最小建议 |
+|------|----------|
+| 仍命中玩具 HTTP / `sk_lookup demo OK` | loader 未把 FD 换成 OpenResty listen；检查 sockmap/redir 注册 |
+| `$server_port`==内听且无 `$waf_external_port` | **FAIL** — 必须另通道灌外口（BPF 元数据 / original dst / 约定模块）；勿放行 |
+| OpenResty >1.19 且用了新 API | 降到 1.19.3.2 或删掉高版本依赖后重验 |
+| attach / map 权限失败 | root、`bpftool feature`、节点是否禁 BPF |
+| multi-worker 连错 / 失败 | M1 先单 worker 或按 1.19.3.2 reuseport 行为收窄 |
+
+## 结论栏（执行后填写）
+
+- **总体**: ☐ PASS · ☐ FAIL · ☐ BLOCKED
+- **PR**: 
+- **OpenResty 版本字符串**: 
+- **内核**: 
+- **阻塞 / 交还 Repo 的项**: 
+- **报告时间 (Asia/Shanghai)**: 
+
+---
+*清单作者: Test · 对齐 Json M1 开工指令 + Notion 里程碑验收标准 · 未改产品代码*
