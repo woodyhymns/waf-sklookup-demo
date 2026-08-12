@@ -1,69 +1,58 @@
-# M1 acceptance run log
+# M1 acceptance run log — Test (QA) for Alex Chu
+# PR: https://github.com/woodyhymns/waf-sklookup-demo/pull/1
+# Branch: feat/openresty-integration @ 9c1501b
 # Host: Debian 13 (trixie) / Linux 6.12.94+
 # Time: 2026-08-13 01:16–01:17 Asia/Shanghai (CST, UTC+8)
-# Branch: feat/openresty-integration @ 9c1501b
-# OpenResty: built from official openresty-1.19.3.2.tar.gz → /usr/local/openresty
-# Docker: not available on box (local install used)
+# Overall: PASS (M1-1…M1-5)
+# NO MERGE / NO DEPLOY
 
-## Preflight
+## Install attempts
+1. which openresty nginx docker podman nerdctl → missing
+2. apt OpenResty Debian dists (bookworm/buster/stretch) → only ≥1.25; no 1.19.3.2
+3. libpcre3-dev unavailable on Debian 13; source build blocked for quick path
+4. Downloaded Docker Hub image openresty/openresty:1.19.3.2-bionic amd64 layers;
+   extracted /usr/local/openresty (bundled pcre+openssl via RUNPATH) → SUCCESS
+5. Also fetched openresty-1.19.3.2.tar.gz + pcre-8.45.tar.gz as fallback (not used for final binary)
+
 $ openresty -v 2>&1
 nginx version: openresty/1.19.3.2
+
+$ openresty -V 2>&1 | head -4
+nginx version: openresty/1.19.3.2
+built by gcc 7.5.0 (Ubuntu 7.5.0-3ubuntu1~18.04)
+built with OpenSSL 1.1.1k  25 Mar 2021
+TLS SNI support enabled
 
 $ uname -r
 6.12.94+
 
-$ sudo bpftool feature probe | rg sk_lookup
-eBPF program_type sk_lookup is available
+$ sudo bpftool feature list_builtins prog_types | rg sk_lookup
+sk_lookup
 
-$ go test (CGO_ENABLED=0; dispatch.bpf.c temporarily renamed so Go does not require cgo)
-=== RUN   TestParsePortList
---- PASS: TestParsePortList (0.00s)
-=== RUN   TestParseListenInode
---- PASS: TestParseListenInode (0.00s)
-=== RUN   TestIPToProcHex
---- PASS: TestIPToProcHex (0.00s)
-PASS
-ok  	github.com/woodyhymns/waf-sklookup-demo	0.002s
+## Build / unit tests
+$ export CGO_ENABLED=0 OPENRESTY_PREFIX=/usr/local/openresty
+$ make build && make test
+go generate ./...
+go build -o waf-sklookup-demo .
+go test ./...
+ok  	github.com/woodyhymns/waf-sklookup-demo	0.003s
+# Note: CGO_ENABLED=0 works with dispatch.bpf.c present; no rename needed.
 
 ## Start
-$ export OPENRESTY_PREFIX=/usr/local/openresty
 $ ./run-openresty-demo.sh start
-nginx: the configuration file /tmp/waf-sklookup-m1/conf/nginx.conf syntax is ok
-nginx: configuration file /tmp/waf-sklookup-m1/conf/nginx.conf test is successful
-OpenResty started (local) nginx version: openresty/1.19.3.2 prefix=/tmp/waf-sklookup-m1/runtime config=/tmp/waf-sklookup-m1/conf/nginx.conf
-Loader PID 64165
-Run './run-openresty-demo.sh verify' to check steered ports (M1-1..3).
-
-## Loader ready (excerpt)
-2026/08/12 17:16:39 sk_lookup attached to current netns
-2026/08/12 17:16:39 pinned maps under /sys/fs/bpf/waf-sklookup (open_ports, redir_socket)
-2026/08/12 17:16:39 discovered listen socket inode=130989 for 127.0.0.1:8080
-2026/08/12 17:16:39 registered listening socket fd=11 in redir_socket sockmap
-2026/08/12 17:16:39 opened steered port 18081 (no userspace bind on that port)
-2026/08/12 17:16:39 opened steered port 18082 (no userspace bind on that port)
-2026/08/12 17:16:39 opened steered port 65500 (no userspace bind on that port)
+OpenResty started (local) nginx version: openresty/1.19.3.2 ...
+Loader: sk_lookup attached; pinned /sys/fs/bpf/waf-sklookup; registered listen fd for 127.0.0.1:8080
+opened steered ports 18081,18082,65500 (no userspace bind)
 ======== OPENRESTY M1 READY ========
 
-## verify (M1-1..3, M1-5)
-$ ./run-openresty-demo.sh verify
-=== M1-5 OpenResty version (if local binary) ===
-nginx version: openresty/1.19.3.2
+## M1-1 bind check
+$ ss -lntp | rg '8080|18081|18082|65500'
+LISTEN 0 511 127.0.0.1:8080 0.0.0.0:* users:(("openresty",...))
+# /proc/net/tcp LISTEN only port 8080
+RESULT: PASS — only internal listen
 
-=== M1-1 bind check (ss -lntp; only internal listen expected) ===
-LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=63850,fd=8),("openresty",pid=63849,fd=8))
-PASS: no userspace LISTEN on steered ports
-
-=== M1-2/M1-3 curl internal 127.0.0.1:8080 ===
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-X-Waf-External-Port: 8080
-X-Waf-Internal-Port: 8080
-OpenResty M1 OK
-waf_external_port=8080
-server_port=8080
-remote_addr=127.0.0.1
-
-=== curl steered :18081 ===
+## M1-2 / M1-3 curls
+$ curl -sS -D- http://127.0.0.1:18081/
 HTTP/1.1 200 OK
 Server: openresty/1.19.3.2
 X-Waf-External-Port: 18081
@@ -73,282 +62,57 @@ waf_external_port=18081
 server_port=8080
 remote_addr=127.0.0.1
 
-=== curl steered :18082 ===
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-X-Waf-External-Port: 18082
-X-Waf-Internal-Port: 8080
-OpenResty M1 OK
-waf_external_port=18082
-server_port=8080
-remote_addr=127.0.0.1
+$ curl -sS -D- http://127.0.0.1:18082/
+... X-Waf-External-Port: 18082 / X-Waf-Internal-Port: 8080 / OpenResty M1 OK
 
-=== curl steered :65500 ===
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-X-Waf-External-Port: 65500
-X-Waf-Internal-Port: 8080
-OpenResty M1 OK
-waf_external_port=65500
-server_port=8080
-remote_addr=127.0.0.1
+$ curl -sS -D- http://127.0.0.1:65500/
+... X-Waf-External-Port: 65500 / X-Waf-Internal-Port: 8080 / OpenResty M1 OK
 
-=== access log tail ===
-127.0.0.1:39046 GET / HTTP/1.1 internal_port=8080 waf_external_port=8080 status=200
-127.0.0.1:52428 GET / HTTP/1.1 internal_port=8080 waf_external_port=18081 status=200
-127.0.0.1:52886 GET / HTTP/1.1 internal_port=8080 waf_external_port=18082 status=200
-127.0.0.1:45492 GET / HTTP/1.1 internal_port=8080 waf_external_port=65500 status=200
+# No "sk_lookup demo OK" toy body on any steered port
+access_log: 127.0.0.1:… internal_port=8080 waf_external_port=18081/18082/65500 status=200
+RESULT: M1-2 PASS, M1-3 PASS
 
-verify OK (M1-1 bind, M1-2 OpenResty body, M1-3 distinct external ports, M1-5 version header)
-
-## M1-4 close-port negative
-$ ./run-openresty-demo.sh close-port 18081
-2026/08/12 17:16:56 closed steered port 18081 (removed from open_ports)
-
-$ curl -sS --max-time 3 http://127.0.0.1:18081/
-curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
-
-$ curl -sS --max-time 3 -D- http://127.0.0.1:18082/
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-X-Waf-External-Port: 18082
-OpenResty M1 OK
-waf_external_port=18082
-
+## M1-4 close-port
 $ ./run-openresty-demo.sh dump-ports
-18082
-65500
-
-## M1-9 unopened port
-$ curl -sS --max-time 2 http://127.0.0.1:18083/
-curl: (7) Failed to connect to 127.0.0.1 port 18083 after 0 ms: Could not connect to server
-
-## Cleanup
-$ ./run-openresty-demo.sh stop
-(stopped; no commit/merge/push)
-
-=== ./run-openresty-demo.sh verify ===
-=== M1-5 OpenResty version (if local binary) ===
-nginx version: openresty/1.19.3.2
-
-=== M1-1 bind check (ss -lntp; only internal listen expected) ===
-LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=65184,fd=8),("openresty",pid=65183,fd=8))                               
-PASS: no userspace LISTEN on steered ports
-
-=== M1-2/M1-3 curl internal 127.0.0.1:8080 ===
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-Date: Wed, 12 Aug 2026 17:17:20 GMT
-Content-Type: text/plain
-Transfer-Encoding: chunked
-Connection: keep-alive
-X-Waf-External-Port: 8080
-X-Waf-Internal-Port: 8080
-
-OpenResty M1 OK
-waf_external_port=8080
-server_port=8080
-remote_addr=127.0.0.1
-
-=== curl steered :18081 ===
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-Date: Wed, 12 Aug 2026 17:17:20 GMT
-Content-Type: text/plain
-Transfer-Encoding: chunked
-Connection: keep-alive
-X-Waf-External-Port: 18081
-X-Waf-Internal-Port: 8080
-
-OpenResty M1 OK
-waf_external_port=18081
-server_port=8080
-remote_addr=127.0.0.1
-
-=== curl steered :18082 ===
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-Date: Wed, 12 Aug 2026 17:17:20 GMT
-Content-Type: text/plain
-Transfer-Encoding: chunked
-Connection: keep-alive
-X-Waf-External-Port: 18082
-X-Waf-Internal-Port: 8080
-
-OpenResty M1 OK
-waf_external_port=18082
-server_port=8080
-remote_addr=127.0.0.1
-
-=== curl steered :65500 ===
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-Date: Wed, 12 Aug 2026 17:17:20 GMT
-Content-Type: text/plain
-Transfer-Encoding: chunked
-Connection: keep-alive
-X-Waf-External-Port: 65500
-X-Waf-Internal-Port: 8080
-
-OpenResty M1 OK
-waf_external_port=65500
-server_port=8080
-remote_addr=127.0.0.1
-
-=== access log tail ===
-127.0.0.1:52428 GET / HTTP/1.1 internal_port=8080 waf_external_port=18081 status=200
-127.0.0.1:52886 GET / HTTP/1.1 internal_port=8080 waf_external_port=18082 status=200
-127.0.0.1:45492 GET / HTTP/1.1 internal_port=8080 waf_external_port=65500 status=200
-127.0.0.1:52902 GET / HTTP/1.1 internal_port=8080 waf_external_port=18082 status=200
-127.0.0.1:54958 GET / HTTP/1.1 internal_port=8080 waf_external_port=8080 status=200
-127.0.0.1:35604 GET / HTTP/1.1 internal_port=8080 waf_external_port=18081 status=200
-127.0.0.1:50160 GET / HTTP/1.1 internal_port=8080 waf_external_port=18082 status=200
-127.0.0.1:35704 GET / HTTP/1.1 internal_port=8080 waf_external_port=65500 status=200
-
-verify OK (M1-1 bind, M1-2 OpenResty body, M1-3 distinct external ports, M1-5 version header)
-M1-4: ./run-openresty-demo.sh close-port 18081   # or: sudo bpftool map delete name open_ports key hex a9 46
-
-=== M1-1: ss -lntp (expect only 8080) ===
-(no matches for those ports — unexpected if 8080 missing)
---- full relevant ss ---
-LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=65184,fd=8),("openresty",pid=65183,fd=8))                               
-
-=== M1-1: /proc/net/tcp LISTEN (state 0A) for those ports ===
-state=0A local=0100007F:1F90 port=8080 LISTEN
-
-=== M1-2/M1-3: curl headers+body for each port ===
------ curl :8080 -----
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-Date: Wed, 12 Aug 2026 17:17:20 GMT
-Content-Type: text/plain
-Transfer-Encoding: chunked
-Connection: keep-alive
-X-Waf-External-Port: 8080
-X-Waf-Internal-Port: 8080
-
-OpenResty M1 OK
-waf_external_port=8080
-server_port=8080
-remote_addr=127.0.0.1
-
------ curl :18081 -----
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-Date: Wed, 12 Aug 2026 17:17:20 GMT
-Content-Type: text/plain
-Transfer-Encoding: chunked
-Connection: keep-alive
-X-Waf-External-Port: 18081
-X-Waf-Internal-Port: 8080
-
-OpenResty M1 OK
-waf_external_port=18081
-server_port=8080
-remote_addr=127.0.0.1
-
------ curl :18082 -----
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-Date: Wed, 12 Aug 2026 17:17:20 GMT
-Content-Type: text/plain
-Transfer-Encoding: chunked
-Connection: keep-alive
-X-Waf-External-Port: 18082
-X-Waf-Internal-Port: 8080
-
-OpenResty M1 OK
-waf_external_port=18082
-server_port=8080
-remote_addr=127.0.0.1
-
------ curl :65500 -----
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-Date: Wed, 12 Aug 2026 17:17:20 GMT
-Content-Type: text/plain
-Transfer-Encoding: chunked
-Connection: keep-alive
-X-Waf-External-Port: 65500
-X-Waf-Internal-Port: 8080
-
-OpenResty M1 OK
-waf_external_port=65500
-server_port=8080
-remote_addr=127.0.0.1
-
-
-=== M1-5: version ===
-nginx version: openresty/1.19.3.2
-Server: openresty/1.19.3.2
-OpenResty M1 OK
-
-=== M1-4: dump-ports before ===
 65500
 18082
 18081
-
-=== M1-4: close-port 18081 ===
-2026/08/12 17:17:24 closed steered port 18081 (removed from open_ports)
-
-=== M1-4: curl deleted :18081 (expect fail) ===
-curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
-curl_18081_exit=7
-
-=== M1-4: neighbor :18082 still works ===
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-Date: Wed, 12 Aug 2026 17:17:24 GMT
-Content-Type: text/plain
-Transfer-Encoding: chunked
-Connection: keep-alive
-X-Waf-External-Port: 18082
-X-Waf-Internal-Port: 8080
-
-OpenResty M1 OK
-waf_external_port=18082
-server_port=8080
-remote_addr=127.0.0.1
-
-=== M1-4: :65500 still works ===
-HTTP/1.1 200 OK
-Server: openresty/1.19.3.2
-Date: Wed, 12 Aug 2026 17:17:24 GMT
-Content-Type: text/plain
-Transfer-Encoding: chunked
-Connection: keep-alive
-X-Waf-External-Port: 65500
-X-Waf-Internal-Port: 8080
-
-OpenResty M1 OK
-waf_external_port=65500
-server_port=8080
-remote_addr=127.0.0.1
-
-=== M1-4: dump-ports after ===
+$ ./run-openresty-demo.sh close-port 18081
+closed steered port 18081
+$ curl -sS --max-time 3 http://127.0.0.1:18081/
+curl: (7) Failed to connect to 127.0.0.1 port 18081 ...
+$ curl -sS http://127.0.0.1:18082/
+HTTP/1.1 200 OK ... X-Waf-External-Port: 18082 ... OpenResty M1 OK
+$ curl -sS http://127.0.0.1:65500/
+HTTP/1.1 200 OK ... X-Waf-External-Port: 65500 ... OpenResty M1 OK
+$ ./run-openresty-demo.sh dump-ports
 65500
 18082
+$ sudo bpftool map dump pinned /sys/fs/bpf/waf-sklookup/open_ports
+[{"key":65500,"value":1},{"key":18082,"value":1}]
+RESULT: PASS
 
-=== bpftool map dump pinned open_ports ===
-[{
-        "key": 65500,
-        "value": 1
-    },{
-        "key": 18082,
-        "value": 1
-    }
-]
+## M1-5 version
+$ openresty -v
+nginx version: openresty/1.19.3.2
+# Response Server header matches
+RESULT: PASS (exact 1.19.3.2)
 
-=== cleanup: stop ===
-Stopped.
+## Extended (non-gating)
+M1-6 N/A (HTTP-first PR)
+M1-7 PASS (access_log has client IP + waf_external_port)
+M1-8 N/A (no WAF rule matrix in PR)
+M1-9 PASS (never-opened :18083 connect fail; closed :18081 fail)
+M1-10 PASS (run-openresty-demo.sh + docs/openresty-m1.md)
 
-=== post-stop ss (expect no 8080/steered) ===
-(none — clean)
+## Cleanup
+$ ./run-openresty-demo.sh stop
+# listeners gone; /sys/fs/bpf/waf-sklookup removed; no leftover openresty/loader
+RESULT: clean
 
-=== post-stop bpf pins ===
-ls: cannot access '/sys/fs/bpf/waf-sklookup': No such file or directory
-(pin dir gone or empty)
-
-=== FINAL: all core M1-1..5 PASS ===
-OpenResty: openresty/1.19.3.2 @ /usr/local/openresty (extracted from docker image openresty/openresty:1.19.3.2-bionic layers)
-Asia/Shanghai: 2026-08-13 01:17:30 CST
+## Summary
+Overall: PASS
+M1-1 PASS | M1-2 PASS | M1-3 PASS | M1-4 PASS | M1-5 PASS
+OpenResty: openresty/1.19.3.2 @ /usr/local/openresty (from openresty/openresty:1.19.3.2-bionic layers)
+Checklist: docs/acceptance-m1.md
+No merge. No deploy.

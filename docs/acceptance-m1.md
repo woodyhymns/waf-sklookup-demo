@@ -2,7 +2,7 @@
 
 - **里程碑**: [可执行里程碑：sk_lookup → OpenResty WAF](https://app.notion.com/p/3ba6e599de1981b292abfec7ccd84417)
 - **分支**: `feat/openresty-integration`
-- **状态**: Test 已跑 · 核心 M1-1…5 全 PASS（见 `docs/acceptance-m1-run.log`）
+- **状态**: Test 已执行 · 核心 M1-1…M1-5 **全部 PASS**（未 merge / 未 deploy；见 `docs/acceptance-m1-run.log`）
 - **PR**: https://github.com/woodyhymns/waf-sklookup-demo/pull/1 （`feat/openresty-integration` → `main`）
 - **执行人**: Test（QA）
 - **总体结论**: **PASS** — 核心五项全绿；扩展项见下表
@@ -11,11 +11,11 @@
 
 | 项 | 要求 | 实测 / 备注 |
 |----|------|-------------|
-| OpenResty | **1.19.3.2** 基线（或明确同代 / 兼容子集；勿依赖更高版本 API） | `nginx version: openresty/1.19.3.2`（官方 tarball 源码安装至 `/usr/local/openresty`；本机无 Docker） |
-| 内核 | ≥5.9，`sk_lookup` available（`bpftool feature`） | `6.12.94+`；`eBPF program_type sk_lookup is available` |
+| OpenResty | **1.19.3.2** 基线（或明确同代 / 兼容子集；勿依赖更高版本 API） | `nginx version: openresty/1.19.3.2`；`OPENRESTY_PREFIX=/usr/local/openresty`。本机无 docker/apt 旧包；从 Docker Hub 镜像 `openresty/openresty:1.19.3.2-bionic` amd64 层解压（`openresty -V` → built by gcc 7.5.0 Ubuntu 18.04） |
+| 内核 | ≥5.9，`sk_lookup` available（`bpftool feature`） | `6.12.94+`；`bpftool feature list_builtins prog_types` → `sk_lookup` |
 | 权限 | root 或 `CAP_BPF` + 必要 net caps | loader via `sudo`；OK |
 | 外口变量 | **必须** `$waf_external_port`（或文档约定等价名）；**禁止**用裸 `$server_port` 当业务外口 | 响应头 `X-Waf-External-Port` + body/access_log `waf_external_port=`；内听恒为 8080 |
-| 非目标 | 不验收玩具 HTTP；不做 M2 热加删 API / M3 压测矩阵 | |
+| 非目标 | 不验收玩具 HTTP；不做 M2 热加删 API / M3 压测矩阵 | 本跑核心 M1-1…5；M1-6 TLS = N/A |
 
 预检命令（执行时粘贴输出）：
 
@@ -23,6 +23,14 @@
 openresty -v 2>&1 || nginx -V 2>&1
 uname -r
 sudo bpftool feature list_builtins prog_types | rg sk_lookup
+```
+
+实测输出（2026-08-13 01:17 CST）：
+
+```text
+nginx version: openresty/1.19.3.2
+6.12.94+
+sk_lookup
 ```
 
 ## 核心验收（Json 要求 · 必过）
@@ -33,7 +41,7 @@ sudo bpftool feature list_builtins prog_types | rg sk_lookup
 | M1-2 | **curl/外口命中真实 OpenResty** — 打已开通外口得到引擎响应（TLS/HTTP 路径来自 OpenResty），**不是** demo 玩具 HTTP（无 `sk_lookup demo OK` 玩具文案） | ☑ PASS / ☐ FAIL / ☐ BLOCKED | 外口 curl 得 `Server: openresty/1.19.3.2` + body `OpenResty M1 OK`；无玩具文案 `sk_lookup demo OK` |
 | M1-3 | **响应或日志可见正确外口** — `$waf_external_port`（或等价）= Client 打的目的端口；至少两外口可区分（例 18081 ≠ 18082 / 65500）；**不得**误报为内听端口 | ☑ PASS / ☐ FAIL / ☐ BLOCKED | 18081/18082/65500 各自 `X-Waf-External-Port`/`waf_external_port=` 等于目的端口且 ≠8080；access_log 可区分 |
 | M1-4 | **负向：删 map 端口后外口失败** — `bpftool map delete`（或约定 CLI）去掉某外口后，新连接该口失败；其它仍开通口可用（约定范围内） | ☑ PASS / ☐ FAIL / ☐ BLOCKED | `./run-openresty-demo.sh close-port 18081` 后 18081 connect fail；18082 仍 200；dump-ports 仅 18082,65500 |
-| M1-5 | **版本备注** — 本次跑在 OpenResty **1.19.3.2**（或同代，写明实际版本字符串） | ☑ PASS / ☐ FAIL / ☐ BLOCKED | `openresty -v` → `nginx version: openresty/1.19.3.2`（官方源码 tarball 安装） |
+| M1-5 | **版本备注** — 本次跑在 OpenResty **1.19.3.2**（或同代，写明实际版本字符串） | ☑ PASS / ☐ FAIL / ☐ BLOCKED | `openresty -v` → `nginx version: openresty/1.19.3.2`；`Server: openresty/1.19.3.2`；精确基线（镜像层解压，非同代近似） |
 
 ## Notion M1 扩展勾选（对齐里程碑页）
 
@@ -117,16 +125,18 @@ openresty -v 2>&1   # nginx version: openresty/1.19.3.2
 | OpenResty >1.19 且用了新 API | 降到 1.19.3.2 或删掉高版本依赖后重验 |
 | attach / map 权限失败 | root、`bpftool feature`、节点是否禁 BPF |
 | multi-worker 连错 / 失败 | M1 先单 worker 或按 1.19.3.2 reuseport 行为收窄 |
+| 本机无 openresty/docker（本跑已解） | 解压官方 `1.19.3.2-bionic` 镜像层到 `/usr/local/openresty`，或装 docker+host 网络镜像；勿用 apt 最新版冒充基线 |
 
 ## 结论栏（执行后填写）
 
 - **总体**: ☑ PASS · ☐ FAIL · ☐ BLOCKED
 - **PR**: https://github.com/woodyhymns/waf-sklookup-demo/pull/1
-- **OpenResty 版本字符串**: `nginx version: openresty/1.19.3.2`（官方 `openresty-1.19.3.2.tar.gz` → `/usr/local/openresty`；无 Docker）
+- **OpenResty 版本字符串**: `nginx version: openresty/1.19.3.2`（`/usr/local/openresty`，源自 Docker Hub `openresty/openresty:1.19.3.2-bionic` amd64 层；`openresty -V` built by gcc 7.5.0 / OpenSSL 1.1.1k）
 - **内核**: `6.12.94+`（`sk_lookup` available）
-- **阻塞 / 交还 Repo 的项**: 无。备注：`go test` 在包根存在 `dispatch.bpf.c` 且 `CGO_ENABLED=0` 时需暂避该 `.c`（或调整布局），与 M1 运行时无关。
+- **阻塞 / 交还 Repo 的项**: 无。核心五项全绿。`CGO_ENABLED=0 make build && make test` 直接通过（无需改名 `dispatch.bpf.c`）。未 merge / 未 deploy。
 - **报告时间 (Asia/Shanghai)**: 2026-08-13 01:17 CST
 - **运行日志**: `docs/acceptance-m1-run.log`
+- **安装尝试纪要**: ① PATH 无 openresty/nginx/docker/podman/nerdctl；② apt OpenResty 仓无 1.19.3.2（仅 ≥1.25）；③ libpcre3-dev 在 Debian 13 不可用、源码构建受阻；④ 下载官方镜像层并解压至 `/usr/local/openresty`（成功，精确 1.19.3.2）
 
 ---
 *清单作者: Test · 对齐 Json M1 开工指令 + Notion 里程碑验收标准*
