@@ -2,7 +2,7 @@
 
 - **里程碑**: [可执行里程碑：sk_lookup → OpenResty WAF](https://app.notion.com/p/3ba6e599de1981b292abfec7ccd84417) §M3
 - **状态**: **DRAFT / 预留** — **不要**在本草稿上跑完整 30K/60K 压测；等 Repo **P1 / M3 readiness**
-- **约束回响**: OpenResty **1.19.3.2**；外口走 `$waf_external_port`；sk_lookup → 固定内听；业务口 ≠ `$server_port`
+- **约束回响**: OpenResty **1.19.3.2**；外口走 `$waf_external_port`；sk_lookup → 固定内听；业务口 ≠ `$server_port`；同口双协议见 `docs/acceptance-p1-tls.md`
 - **执行人**: Test（QA）— harness 可先准备；全量规模待 Repo 暴露批量开端口 / 指标刮取点
 
 > Explicit: **full scale waits for Repo P1/M3 readiness.** Tables below are scaffolds for evidence, not a run log.
@@ -14,7 +14,7 @@
 3. **M3-rollback**: 卸 sk_lookup 可回到 PROXY/旧架构并有记录
 4. **M3-gate**: 书面上线门槛（例：相对直连额外 CPU &lt; 3%～5%）达成或明确豁免
 
-## 端口阶梯矩阵（内存 + QPS + CPU + P99）
+## 表 A — 端口阶梯矩阵（sk_lookup：内存 + QPS + CPU + P99）
 
 压测矩阵**必须**含内存随端口规模变化，不只是吞吐/P99。  
 **全量 30K/60K：暂不执行** — 仅在 Repo 提供批量开端口 API / 工具后由 Test 填实。
@@ -29,38 +29,19 @@
 | **30K** | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | **Alex 要求 · 待 Repo ready** |
 | **60K** | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | **Alex 要求 · 待 Repo ready** |
 
-### 记录方式建议（执行时填实 — 现在只准备）
+## 表 B — 架构对照（sk_lookup vs PROXY vs direct）
 
-```bash
-# 进程 RSS（示例）
-ps -o pid,rss,comm -p <loader_pid>,<openresty_master>,<openresty_workers>
-# 或:
-grep -E 'VmRSS|VmHWM' /proc/<pid>/status
+同一负载模型下比较（**memory + QPS + CPU**；P99 附注）。建议在 ≤10 与 **30K / 60K** 各取一档并排。
 
-# CPU%（示例，采样窗口与压测对齐）
-pidstat -p <pids> 1 <N>
-# 或 mpstat /perf stat；记 cores busy 亦可
-
-# BPF map 侧（以实际 map 名为准）
-sudo bpftool map show name open_ports
-sudo bpftool map show pinned /sys/fs/bpf/waf-sklookup/open_ports
-# 抄 memlock / bytes；不足则补 prog/map 汇总
-
-# QPS / P99（工具以 harness 为准：wrk / h2load / vegeta / 自研）
-# 固定：OpenResty 1.19.3.2、同机、同 payload、同并发阶梯
-```
-
-产出物：**上表填满** + 简短结论（是否随端口近似线性、有无 RSS/BPF/CPU 尖刺）。
-
-## 架构对照表（sk_lookup vs PROXY vs direct）
-
-同一负载模型下比较（填内存 + QPS + CPU；P99 可附注）。
-
-| 架构 | 说明 | 内存（loader+OR+BPF / 或总量） | QPS | CPU% / cores | P99 | notes |
-|------|------|--------------------------------|-----|--------------|-----|-------|
-| **direct** baseline | 直连 OpenResty 内听或旧架构直连（无 sk_lookup / 无 PROXY） | ☐ | ☐ | ☐ | ☐ | 性能基线 |
-| **sk_lookup** | BPF sk_lookup → 固定内听；外口在 map | ☐ | ☐ | ☐ | ☐ | 本方案 |
-| **PROXY** | 旧 PROXY/转发路径（若环境仍有） | ☐ | ☐ | ☐ | ☐ | 回退对照 |
+| 架构 | 端口档 | 内存（loader+OR+BPF / 或分列） | QPS | CPU% / cores | P99 | notes |
+|------|--------|--------------------------------|-----|--------------|-----|-------|
+| **direct** baseline | ≤10 | ☐ | ☐ | ☐ | ☐ | 直连 OpenResty / 旧架构，无 sk_lookup |
+| **sk_lookup** | ≤10 | ☐ | ☐ | ☐ | ☐ | 本方案 |
+| **sk_lookup** | **30K** | ☐ | ☐ | ☐ | ☐ | |
+| **sk_lookup** | **60K** | ☐ | ☐ | ☐ | ☐ | |
+| **PROXY** (+ thin-accept 若有) | ≤10 | ☐ | ☐ | ☐ | ☐ | 回退对照 |
+| **PROXY** (+ thin-accept 若有) | **30K** | ☐ | ☐ | ☐ | ☐ | |
+| **PROXY** (+ thin-accept 若有) | **60K** | ☐ | ☐ | ☐ | ☐ | |
 
 相对直连的额外开销（gate 用）：
 
@@ -71,13 +52,32 @@ sudo bpftool map show pinned /sys/fs/bpf/waf-sklookup/open_ports
 | P99 增量 | ☐ | ☐ | 书面约定 |
 | 内存增量 @30K / @60K | ☐ | ☐ | 无异常尖刺 |
 
+### 记录方式建议（执行时填实 — 现在只准备）
+
+```bash
+# 进程 RSS
+ps -o pid,rss,comm -p <loader_pid>,<openresty_master>,<openresty_workers>
+grep -E 'VmRSS|VmHWM' /proc/<pid>/status
+
+# CPU%（采样窗口与压测对齐）
+pidstat -p <pids> 1 <N>
+# 或 mpstat / perf stat；记 cores busy 亦可
+
+# BPF map
+sudo bpftool map show name open_ports
+sudo bpftool map show pinned /sys/fs/bpf/waf-sklookup/open_ports
+
+# QPS / P99（wrk / h2load / vegeta / 自研）
+# 固定：OpenResty 1.19.3.2、同机、同 payload、同并发阶梯
+```
+
 ## Checklist
 
 | # | 项 | 结果 | 证据槽 |
 |---|----|------|--------|
-| **M3-perf** | 长连接吞吐 / 短连接 CPS / P99；对照 direct vs sk_lookup vs PROXY | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ SKIP(wait Repo) | 对照表 + 原始压测日志路径 |
-| **M3-mem** | 端口阶梯 RSS + BPF map；必含 **30K / 60K** | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ SKIP(wait Repo) | 阶梯表填满 |
-| **M3-scale-conn** | 开通 10 / 100 / 1K（及更高）时建连 P99 | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ SKIP | 可与阶梯表衔接 |
+| **M3-perf** | 长连接吞吐 / 短连接 CPS / P99；对照 direct vs sk_lookup vs PROXY | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ SKIP(wait Repo) | 表 B + 原始压测日志路径 |
+| **M3-mem** | 端口阶梯 RSS + BPF map；必含 **30K / 60K** | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ SKIP(wait Repo) | 表 A 填满 |
+| **M3-scale-conn** | 开通 10 / 100 / 1K（及更高）时建连 P99 | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ SKIP | 可与表 A 衔接 |
 | **M3-hot** | 加删端口时 P99 尖刺（定性→定量） | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ SKIP | 热加删时间线 |
 | **M3-rollback** | 卸 sk_lookup → PROXY/旧架构演练有记录 | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ SKIP | 步骤 + 恢复时间 |
 | **M3-gate** | 书面上线门槛达成或豁免签字 | ☐ PASS / ☐ FAIL / ☐ BLOCKED / ☐ SKIP | 门槛文档链接/摘录 |
@@ -92,10 +92,10 @@ Test 可先准备并行 harness 脚本骨架；下列由 **Repo** 暴露后才�
 | **Port bulk delete / replace** | 热加删与 rollback | CLI + 幂等 |
 | **Metrics scrape points** | QPS、延迟直方图、RSS 旁路 | `/metrics`（Prometheus）或文档化 `pidstat`+access_log 方案 |
 | **Stable pin path** | CI/本地一致 | 现有 `PIN_DIR=/sys/fs/bpf/waf-sklookup` |
-| **TLS/HTTP 负载开关** | P1 TLS 后分别压 HTTP/HTTPS | 配置或 env |
+| **TLS/HTTP 负载开关** | P1 TLS 后分别压 HTTP/HTTPS（同口优先） | 配置或 env |
 | **单 worker / 多 worker 说明** | 1.19.3.2 reuseport 行为 | README / openresty-m1 续写 |
 
-本地烟雾（**非** M3 全量；仅确认工具链）可继续用：
+本地烟雾（**非** M3 全量；仅确认工具链）：
 
 ```bash
 OPENRESTY_PREFIX=/usr/local/openresty ./scripts/accept-m1.sh

@@ -27,7 +27,7 @@ stop-openresty:
 	./run-openresty-demo.sh stop
 
 accept-m1:
-	chmod +x scripts/accept-m1.sh
+	chmod +x scripts/accept-m1.sh run-openresty-demo.sh
 	./scripts/accept-m1.sh
 
 clean:
