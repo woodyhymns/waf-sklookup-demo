@@ -2,6 +2,15 @@
 
 Productization on top of [M1](openresty-m1.md): steered external ports still reach a **fixed internal listen** via `sk_lookup`. TLS is terminated **only** in OpenResty. Protocol (plaintext HTTP vs TLS) is **not** a sk_lookup concern.
 
+## Dual-protocol test cases (explicit)
+
+| Case | What | Engine | Commands |
+|------|------|--------|----------|
+| **Same external port, both protocols** | Product. One steered port, `http://` and `https://` both succeed. sk_lookup does not split. | **Requires Tengine `https_allow_http`** | `curl -sS http://127.0.0.1:18081/` and `curl -sk https://127.0.0.1:18081/` |
+| **Stock TLS handshake** | Fallback only: different internal listen `8443 ssl`, steered `18443`. **Not** the product model. | stock `openresty/1.19.3.2` | `curl -sk https://127.0.0.1:18443/` |
+
+`./run-openresty-demo.sh verify` always probes the **same-port** HTTPS case. On stock 1.19.3.2 that probe is **N/A** (expected). On Tengine it must **PASS**. QA list: [acceptance-p1.md](acceptance-p1.md).
+
 ## Product architecture (Tengine)
 
 Production OpenResty incorporates Tengine’s **`https_allow_http`**: **each nginx listen can accept both cleartext HTTP and HTTPS**. Discrimination happens in the engine, on that listen.

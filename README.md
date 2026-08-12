@@ -47,9 +47,9 @@ Without the BPF program attached, steered-port curls should fail.
 
 OpenResty binds **fixed internal listens** only. The loader registers those listen FDs into the sockmap and opens extra ports in BPF. Do **not** use `$server_port` as the business/external port (after `sk_lookup` it is often `8080` / `8443`). Use **`$waf_external_port`**.
 
-**Product (Tengine):** one listen, both protocols — `listen 127.0.0.1:8080 ssl https_allow_http;` — sk_lookup does not classify HTTP vs TLS. Snippet: [`openresty/nginx.tengine-https-allow-http.conf.example`](openresty/nginx.tengine-https-allow-http.conf.example).
+**Product (Tengine):** one listen, both protocols — `listen 127.0.0.1:8080 ssl https_allow_http;` — sk_lookup does not classify HTTP vs TLS. Snippet: [`openresty/nginx.tengine-https-allow-http.conf.example`](openresty/nginx.tengine-https-allow-http.conf.example). **Same steered port:** `curl http://127.0.0.1:18081/` **and** `curl -k https://127.0.0.1:18081/` — this pair **requires** `https_allow_http` (N/A on the stock 1.19.3.2 image).
 
-**Stock demo (`openresty/openresty:1.19.3.2-bionic`):** that listen flag is **invalid**. Fallback (not the product model): `127.0.0.1:8080` HTTP + `127.0.0.1:8443 ssl`, with `-tls-ports` steered to 8443.
+**Stock demo (`openresty/openresty:1.19.3.2-bionic`):** that listen flag is **invalid**. Fallback (not the product model): `127.0.0.1:8080` HTTP + `127.0.0.1:8443 ssl`, with `-tls-ports` steered to 8443. P1 checklist: [docs/acceptance-p1.md](docs/acceptance-p1.md).
 
 | Must-pass | What to prove | This PR |
 |-----------|---------------|---------|
@@ -152,6 +152,7 @@ sudo ./waf-sklookup-demo -mode open-port -ports 18081
 | `run-openresty-demo.sh` | Start/verify/stop OpenResty demo (HTTP + stock TLS fallback) |
 | `docs/openresty-m1.md` | M1 HTTP wiring |
 | `docs/openresty-p1.md` | P1 TLS product model, stock vs Tengine, header flag |
+| `docs/acceptance-p1.md` | P1 QA: same-port dual protocol (Tengine) vs stock TLS fallback |
 | `docs/acceptance-m1.md` | QA checklist (M1-1…M1-5 required) |
 | `docs/acceptance-m3.md` | M3 stub only (30K/60K memory ladder); not executed in this PR |
 | `docs/design-thin-accept-openresty.md` | Transition design: PROXY v2 + thin-accept + OpenResty TLS |

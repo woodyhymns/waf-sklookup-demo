@@ -25,7 +25,7 @@ Usage: $0 [start|stop|verify|close-port PORT|open-port PORT|dump-ports|certs]
 
   start              Build loader, start OpenResty, attach sk_lookup
   stop               Stop loader + OpenResty started by this script
-  verify             Bind check + HTTP/HTTPS curls (header hidden by default)
+  verify             Bind check + HTTP; dual-protocol SAME-port case; stock TLS fallback
   close-port PORT    Remove PORT from open_ports; loader must be running
   open-port PORT     Re-insert PORT into open_ports (primary slot, or TLS if --tls)
   dump-ports         List steered ports currently in the pinned map
@@ -241,6 +241,58 @@ curl_check() {
   fi
 }
 
+# Product case: SAME steered port accepts both http:// and https://.
+# Requires Tengine https_allow_http (or production OpenResty that includes it).
+# Stock 1.19.3.2: HTTPS on the HTTP-steered port is expected to fail — N/A, not FAIL.
+probe_dual_protocol_same_port() {
+  local host="$1"
+  local hdr="$2"
+  local body="$3"
+  local p=""
+  local err
+  for p in ${LOADER_PORTS//,/ }; do
+    p="${p// /}"
+    [[ -n "$p" ]] && break
+  done
+  if [[ -z "$p" ]]; then
+    echo "skip dual-protocol probe (no LOADER_PORTS)"
+    return 0
+  fi
+
+  echo
+  echo "=== P1 dual-protocol SAME steered port :$p (REQUIRES Tengine https_allow_http) ==="
+  echo "Product: sk_lookup steers :$p to ONE internal listen; OpenResty accepts both:"
+  echo "  curl -sS http://${host}:${p}/"
+  echo "  curl -sk https://${host}:${p}/"
+  echo "Stock openresty/1.19.3.2 has no https_allow_http — HTTPS on this same port is N/A here."
+
+  err="$(mktemp)"
+  if curl -sk -D "$hdr" -o "$body" --max-time 3 "https://${host}:${p}/" 2>"$err"; then
+    if grep -q "OpenResty M1 OK" "$body" && grep -q "waf_external_port=${p}" "$body" && grep -q "scheme=https" "$body"; then
+      echo "PASS: same port accepted TLS (https_allow_http available on this engine)"
+      cat "$hdr"
+      cat "$body"
+      if [[ "${WAF_EXPOSE_EXTERNAL_PORT}" == "1" || "${WAF_EXPOSE_EXTERNAL_PORT}" == "true" ]]; then
+        assert_header_exposed "$hdr" "$p"
+      else
+        assert_header_hidden "$hdr"
+      fi
+      rm -f "$err"
+      return 0
+    fi
+  fi
+  echo "N/A on this engine (expected on stock OpenResty 1.19.3.2)."
+  echo "Production/Tengine must PASS: curl -sk https://${host}:${p}/  (same port as HTTP)"
+  if grep -qi "^HTTP/.* 400" "$hdr" 2>/dev/null; then
+    echo "stock evidence: TLS bytes reached the HTTP listen (HTTP 400) — not dual-protocol."
+  fi
+  if [[ -s "$err" ]]; then
+    echo "stock probe stderr (TLS to HTTP listen):"
+    cat "$err"
+  fi
+  rm -f "$err"
+}
+
 cmd_start() {
   mkdir -p "$(state_dir)"
   start_openresty
@@ -304,6 +356,8 @@ cmd_verify() {
     fi
   done
 
+  probe_dual_protocol_same_port "$host" "$hdr" "$body"
+
   if [[ -n "${LOADER_TLS_PORTS}" ]]; then
     local tls_host tls_port
     tls_host="${TLS_TARGET%%:*}"
@@ -334,9 +388,9 @@ cmd_verify() {
   echo
   echo "verify OK"
   echo "  HTTP steered ports hit OpenResty; body/log have \$waf_external_port"
+  echo "  Dual-protocol SAME port (http+https on :18081): REQUIRES Tengine https_allow_http"
   echo "  X-Waf-External-Port default hidden (set WAF_EXPOSE_EXTERNAL_PORT=1 and restart to expose)"
-  echo "  Stock TLS fallback uses -k against :18443 → 127.0.0.1:8443 ssl"
-  echo "  Tengine product: same external port, http:// and https://, one internal listen — see docs/openresty-p1.md"
+  echo "  Stock TLS fallback (NOT product): curl -k https://127.0.0.1:18443/ → 127.0.0.1:8443 ssl"
   echo "close-port: $0 close-port 18081"
   echo "open-port:  $0 open-port 18081"
 }
