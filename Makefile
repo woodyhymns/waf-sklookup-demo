@@ -1,4 +1,4 @@
-.PHONY: generate build run run-toy run-openresty verify-openresty stop-openresty test clean
+.PHONY: generate build run run-toy run-openresty verify-openresty stop-openresty accept-m1 test clean
 
 export CGO_ENABLED=0
 
@@ -25,6 +25,10 @@ verify-openresty:
 
 stop-openresty:
 	./run-openresty-demo.sh stop
+
+accept-m1:
+	chmod +x scripts/accept-m1.sh
+	./scripts/accept-m1.sh
 
 clean:
 	rm -f waf-sklookup-demo dispatch_bpfel.go dispatch_bpfel.o dispatch_bpfeb.go dispatch_bpfeb.o

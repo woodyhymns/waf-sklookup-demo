@@ -7,6 +7,20 @@
 - **执行人**: Test（QA）
 - **总体结论**: **PASS** — 核心五项全绿；扩展项见下表
 
+## Automation / 自动化
+
+本地优先（对齐本清单 M1-1…M1-5）。驱动 `./run-openresty-demo.sh`（start → verify → close-port → stop；EXIT 始终 stop）：
+
+```bash
+OPENRESTY_PREFIX=/usr/local/openresty ./scripts/accept-m1.sh
+# 等价: make accept-m1
+```
+
+- 覆盖核心必过 **M1-1…M1-5**（含 close-port 负向）；可选未开通口（默认 `18083`）。
+- 机器可读摘要: `docs/acceptance-m1-last.json`（脚本生成，勿手改）。
+- 本文件历史 PASS 证据保留（见 `docs/acceptance-m1-run.log`）；复验以 JSON + 终端为准。
+- CI: 仅适合 self-hosted Linux + BPF `sk_lookup` + OpenResty **1.19.3.2**；默认不配 GitHub-hosted workflow。
+
 ## 环境约束（硬性）
 
 | 项 | 要求 | 实测 / 备注 |
