@@ -9,6 +9,8 @@
 - **总体（stock fallback）**: **PASS**（可验证项全绿；同口双协议 **N/A/BLOCKED**，非 FAIL）
 - **不要 merge**
 
+> **Merge gate (Alex):** 合 PR #4 前须在 **`https_allow_http` 运行时** 将 **P1-A** 跑成 PASS。stock 仅 N/A/BLOCKED 不够。就绪后：`OPENRESTY_PREFIX=... ./scripts/accept-p1-a-dual.sh`，PASS 即 @ Json。
+
 产品约束：sk_lookup 只把外口导向固定内听；**协议由 OpenResty 选**，不是 8080=HTTP / 8443=TLS 的产品模型。文档（PR 描述 / `docs/openresty-p1.md` / `nginx.conf` 注释 / tengine example）已写清 `https_allow_http` → **文档清晰：YES**。
 
 ## 双协议用例（先看这个）
