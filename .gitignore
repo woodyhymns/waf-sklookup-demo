@@ -6,3 +6,4 @@
 /waf-sklookup-demo
 *.o
 /bin/
+*.deb

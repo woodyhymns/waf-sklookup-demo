@@ -1,5 +1,7 @@
 .PHONY: generate build run clean
 
+export CGO_ENABLED=0
+
 generate:
 	go generate ./...
 
