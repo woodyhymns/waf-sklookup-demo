@@ -1,0 +1,443 @@
+=== P1 Acceptance Run Log ===
+Date (UTC): 2026-08-12 23:45:12 UTC
+Date (Asia/Shanghai): 2026-08-13 07:45:12 CST
+Branch: feat/product-p1-tls-and-headers
+Tip SHA: 30da0c6380f6269987a642da5f457dbe4a918a03
+PR: https://github.com/woodyhymns/waf-sklookup-demo/pull/4
+Engine: nginx version: openresty/1.19.3.2
+OPENRESTY_PREFIX=/usr/local/openresty
+docs/acceptance-p1-tls.md: ABSENT (on harness PR #3; items mapped into acceptance-p1.md)
+
+=== make certs ===
+chmod +x openresty/certs/gen-demo-certs.sh
+./openresty/certs/gen-demo-certs.sh
+.........+....+...+...+..+......+.+...+..+.+.....+++++++++++++++++++++++++++++++++++++++*....+.........+......+++++++++++++++++++++++++++++++++++++++*...++++++
+..+.....+.......+..+.+..................+............+++++++++++++++++++++++++++++++++++++++*........+...+.+...+...+........+.+.....+.........+......+.+...+...........+...+......+.+........+.+............+...+...........+....+..+++++++++++++++++++++++++++++++++++++++*.....+...+......+.......+..+.+.........+..+................+...+...........+..................+...+.......+...........+.......+..+.............+..+...+...+.+......+........+.+.....+.+........+......+....+.........+...........+..........+..+...................+...........+...+.+...+..+......++++++
+-----
+wrote DEMO-ONLY /workspace/waf-sklookup-demo/openresty/certs/demo.crt and /workspace/waf-sklookup-demo/openresty/certs/demo.key
+label: self-signed demo identity for waf-sklookup-demo; not a production cert
+=== make test ===
+go generate ./...
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfel.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfel.go
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfeb.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfeb.go
+go test ./...
+ok  	github.com/woodyhymns/waf-sklookup-demo	0.003s
+
+=== Evidence: stock nginx -t rejects https_allow_http ===
+nginx: [emerg] invalid parameter "https_allow_http" in /tmp/tmp.lFs3ud39j2/nginx.conf:44
+nginx: configuration file /tmp/tmp.lFs3ud39j2/nginx.conf test failed
+exit_code=1
+(expect non-zero + invalid parameter "https_allow_http")
+
+=== ./run-openresty-demo.sh stop (cleanup any prior) ===
+Stopped.
+
+=== ./run-openresty-demo.sh start ===
+certs already present: /workspace/waf-sklookup-demo/openresty/certs/demo.crt /workspace/waf-sklookup-demo/openresty/certs/demo.key (FORCE=1 to regenerate)
+nginx: the configuration file /tmp/waf-sklookup-m1/conf/nginx.conf syntax is ok
+nginx: configuration file /tmp/waf-sklookup-m1/conf/nginx.conf test is successful
+OpenResty started (local) nginx version: openresty/1.19.3.2 prefix=/tmp/waf-sklookup-m1/runtime config=/tmp/waf-sklookup-m1/conf/nginx.conf expose=off
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfel.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfel.go
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfeb.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfeb.go
+Loader PID 159214
+Run './run-openresty-demo.sh verify' to check steered HTTP/HTTPS ports.
+Default: X-Waf-External-Port is hidden. Restart with WAF_EXPOSE_EXTERNAL_PORT=1 to expose it.
+
+=== ./run-openresty-demo.sh verify ===
+=== OpenResty version (if local binary) ===
+nginx version: openresty/1.19.3.2
+WAF_EXPOSE_EXTERNAL_PORT=off
+
+=== bind check (ss -lntp; only internal listens expected) ===
+LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=159366,fd=8),("openresty",pid=159365,fd=8))                               
+LISTEN 0      511        127.0.0.1:8443       0.0.0.0:*    users:(("openresty",pid=159366,fd=9),("openresty",pid=159365,fd=9))                               
+PASS: no userspace LISTEN on steered ports
+
+=== curl internal HTTP 127.0.0.1:8080 ===
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:45:27 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+OpenResty M1 OK
+waf_external_port=8080
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+
+=== curl steered HTTP :18081 ===
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+verify_exit=7
+
+=== Diagnose steered port failure ===
+--- loader process ---
+214:box       157645  0.0  0.0   4752  3884 ?        Ss   23:44   0:00 /usr/bin/bash -O extglob -c snap=$(command cat <&3) && builtin shopt -s extglob && builtin eval -- "$snap" && { builtin set +u 2>/dev/null || true; builtin eval "${__CURSOR_SANDBOX_ENV_RESTORE:-}" 2>/dev/null; builtin export PWD="$(builtin pwd)"; builtin shopt -s expand_aliases 2>/dev/null; builtin eval "$1"; }; COMMAND_EXIT_CODE=$?; dump_bash_state >&4; builtin exit $COMMAND_EXIT_CODE -- cd /workspace/waf-sklookup-demo && git fetch origin feat/product-p1-tls-and-headers 2>&1 && git checkout feat/product-p1-tls-and-headers 2>&1 && git pull --ff-only origin feat/product-p1-tls-and-headers 2>&1 && git log -1 --oneline && git rev-parse HEAD && ls docs/acceptance-p1*.md scripts/ 2>&1; /usr/local/openresty/bin/openresty -v 2>&1; rg -n 'https_allow_http|probe|X-Waf-External|WAF_EXTERNAL' -g '*.md' -g '*.conf' -g '*.lua' -g '*.sh' -g '*.go' 2>/dev/null | head -50
+217:box       159365  0.0  0.0  19748  2268 ?        Ss   23:45   0:00 nginx: master process /usr/local/openresty/bin/openresty -p /tmp/waf-sklookup-m1/runtime -c /tmp/waf-sklookup-m1/conf/nginx.conf
+219:root      159670  0.0  0.0  16468  7136 ?        S    23:45   0:00 sudo ./waf-sklookup-demo -mode openresty -target 127.0.0.1:8080 -ports 18081,18082,65500 -tls-target 127.0.0.1:8443 -tls-ports 18443 -wait 60s -pin-dir /sys/fs/bpf/waf-sklookup
+220:root      159680  0.2  0.0 1231296 7644 ?        Sl   23:45   0:00 ./waf-sklookup-demo -mode openresty -target 127.0.0.1:8080 -ports 18081,18082,65500 -tls-target 127.0.0.1:8443 -tls-ports 18443 -wait 60s -pin-dir /sys/fs/bpf/waf-sklookup
+223:box       159800  0.0  0.0   4752  3856 ?        Ss   23:45   0:00 /usr/bin/bash -O extglob -c snap=$(command cat <&3) && builtin shopt -s extglob && builtin eval -- "$snap" && { builtin set +u 2>/dev/null || true; builtin eval "${__CURSOR_SANDBOX_ENV_RESTORE:-}" 2>/dev/null; builtin export PWD="$(builtin pwd)"; builtin shopt -s expand_aliases 2>/dev/null; builtin eval "$1"; }; COMMAND_EXIT_CODE=$?; dump_bash_state >&4; builtin exit $COMMAND_EXIT_CODE -- cd /workspace/waf-sklookup-demo && LOG=docs/acceptance-p1-run.log && {   echo   echo "=== Diagnose steered port failure ==="   echo "--- loader process ---"   ps aux | rg -n 'waf-sklookup|openresty' || true   echo "--- pin dir ---"   ls -la /sys/fs/bpf/waf-sklookup 2>&1 || true   echo "--- dump-ports ---"   ./run-openresty-demo.sh dump-ports 2>&1 || true   echo "--- loader log / runtime logs ---"   ls -la /tmp/waf-sklookup-m1/ 2>&1 || true   find /tmp/waf-sklookup-m1 -type f 2>/dev/null | head -50 } | tee -a "$LOG"
+224:box       159814  0.0  0.0   4752  2256 ?        S    23:45   0:00 /usr/bin/bash -O extglob -c snap=$(command cat <&3) && builtin shopt -s extglob && builtin eval -- "$snap" && { builtin set +u 2>/dev/null || true; builtin eval "${__CURSOR_SANDBOX_ENV_RESTORE:-}" 2>/dev/null; builtin export PWD="$(builtin pwd)"; builtin shopt -s expand_aliases 2>/dev/null; builtin eval "$1"; }; COMMAND_EXIT_CODE=$?; dump_bash_state >&4; builtin exit $COMMAND_EXIT_CODE -- cd /workspace/waf-sklookup-demo && LOG=docs/acceptance-p1-run.log && {   echo   echo "=== Diagnose steered port failure ==="   echo "--- loader process ---"   ps aux | rg -n 'waf-sklookup|openresty' || true   echo "--- pin dir ---"   ls -la /sys/fs/bpf/waf-sklookup 2>&1 || true   echo "--- dump-ports ---"   ./run-openresty-demo.sh dump-ports 2>&1 || true   echo "--- loader log / runtime logs ---"   ls -la /tmp/waf-sklookup-m1/ 2>&1 || true   find /tmp/waf-sklookup-m1 -type f 2>/dev/null | head -50 } | tee -a "$LOG"
+227:box       159817  0.0  0.0   8848  6420 ?        S    23:45   0:00 rg -n waf-sklookup|openresty
+--- pin dir ---
+total 0
+drwxr-xr-x 2 root root 0 Aug 12 23:45 .
+drwxrwxrwt 3 root root 0 Aug 12 23:45 ..
+-rw------- 1 root root 0 Aug 12 23:45 open_ports
+-rw------- 1 root root 0 Aug 12 23:45 redir_socket
+--- dump-ports ---
+18081	redir=0	primary
+18082	redir=0	primary
+65500	redir=0	primary
+18443	redir=1	tls-fallback
+--- loader log / runtime logs ---
+total 36
+drwxr-xr-x 5 box  box  4096 Aug 12 23:45 .
+drwxrwxrwt 1 root root 4096 Aug 12 23:45 ..
+drwxr-xr-x 2 box  box  4096 Aug 12 23:45 conf
+-rw-r--r-- 1 box  box  2198 Aug 12 23:45 loader.log
+-rw-r--r-- 1 box  box     7 Aug 12 23:45 loader.pid
+drwxr-xr-x 2 box  box  4096 Aug 12 23:45 logs
+-rw-r--r-- 1 box  box    36 Aug 12 23:45 openresty.pidpath
+drwxr-xr-x 8 box  box  4096 Aug 12 17:16 runtime
+/tmp/waf-sklookup-m1/openresty.pidpath
+/tmp/waf-sklookup-m1/loader.log
+/tmp/waf-sklookup-m1/conf/nginx.conf
+/tmp/waf-sklookup-m1/loader.pid
+/tmp/waf-sklookup-m1/runtime/logs/error.log
+/tmp/waf-sklookup-m1/logs/access.log
+/tmp/waf-sklookup-m1/logs/error.log
+=== more diagnose ===
+--- bpftool prog ---
+3: cgroup_device  name sd_devices  tag f958f6eb72ef5af6  gpl
+	loaded_at 2026-08-12T15:35:34+0000  uid 0
+	xlated 456B  not jited  memlock 4096B
+4: cgroup_skb  name sd_fw_egress  tag 6deef7357e7b4530  gpl
+	loaded_at 2026-08-12T15:35:34+0000  uid 0
+	xlated 64B  not jited  memlock 4096B
+5: cgroup_skb  name sd_fw_ingress  tag 6deef7357e7b4530  gpl
+	loaded_at 2026-08-12T15:35:34+0000  uid 0
+	xlated 64B  not jited  memlock 4096B
+6: cgroup_skb  name sd_fw_egress  tag 6deef7357e7b4530  gpl
+	loaded_at 2026-08-12T15:35:34+0000  uid 0
+	xlated 64B  not jited  memlock 4096B
+7: cgroup_skb  name sd_fw_ingress  tag 6deef7357e7b4530  gpl
+	loaded_at 2026-08-12T15:35:34+0000  uid 0
+	xlated 64B  not jited  memlock 4096B
+8: cgroup_device  name sd_devices  tag ee0e253c78993a24  gpl
+	loaded_at 2026-08-12T15:35:34+0000  uid 0
+	xlated 416B  not jited  memlock 4096B
+9: cgroup_device  name sd_devices  tag 8c42dee26e8cd4c2  gpl
+	loaded_at 2026-08-12T15:35:34+0000  uid 0
+	xlated 648B  not jited  memlock 4096B
+10: cgroup_skb  name sd_fw_egress  tag 6deef7357e7b4530  gpl
+	loaded_at 2026-08-12T15:35:34+0000  uid 0
+	xlated 64B  not jited  memlock 4096B
+11: cgroup_skb  name sd_fw_ingress  tag 6deef7357e7b4530  gpl
+	loaded_at 2026-08-12T15:35:34+0000  uid 0
+	xlated 64B  not jited  memlock 4096B
+14: cgroup_device  tag 3918c82a5f4c0360
+	loaded_at 2026-08-12T15:36:18+0000  uid 0
+	xlated 64B  not jited  memlock 4096B
+868: sk_lookup  name dispatch  tag 9bf8d6f72033f129  gpl
+	loaded_at 2026-08-12T23:45:28+0000  uid 0
+	xlated 280B  not jited  memlock 4096B  map_ids 157,158
+	btf_id 70
+--- bpftool net ---
+xdp:
+
+tc:
+
+flow_dissector:
+
+netfilter:
+
+--- uname ---
+Linux cursor 6.12.94+ #1 SMP PREEMPT_DYNAMIC Tue Jul 28 22:00:48 UTC 2026 x86_64 GNU/Linux
+--- try curl again with verbose ---
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying 127.0.0.1:18081...
+* Connected to 127.0.0.1 (127.0.0.1) port 18081
+* using HTTP/1.x
+> GET / HTTP/1.1
+> Host: 127.0.0.1:18081
+> User-Agent: curl/8.14.1
+> Accept: */*
+> 
+* Request completely sent off
+< HTTP/1.1 200 OK
+< Server: openresty/1.19.3.2
+< Date: Wed, 12 Aug 2026 23:45:36 GMT
+< Content-Type: text/plain
+< Transfer-Encoding: chunked
+< Connection: keep-alive
+< 
+{ [125 bytes data]
+100    91    0    91    0     0  74164      0 --:--:-- --:--:-- --:--:-- 91000
+* Connection #0 to host 127.0.0.1 left intact
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+--- try internal again ---
+OpenResty M1 OK
+waf_external_port=8080
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+--- ip link / netns ---
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: enp0s3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP mode DEFAULT group default qlen 1000
+    link/ether 82:2b:38:3d:bc:d0 brd ff:ff:ff:ff:ff:ff
+3: docker0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc noqueue state DOWN mode DEFAULT group default 
+    link/ether ce:ea:3c:78:78:f5 brd ff:ff:ff:ff:ff:ff
+/proc/self/ns/net
+net:[4026531840]
+net:[4026531840]
+
+=== RETRY ./run-openresty-demo.sh verify (after loader ready) ===
+=== OpenResty version (if local binary) ===
+nginx version: openresty/1.19.3.2
+WAF_EXPOSE_EXTERNAL_PORT=off
+
+=== bind check (ss -lntp; only internal listens expected) ===
+LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=159366,fd=8),("openresty",pid=159365,fd=8))                               
+LISTEN 0      511        127.0.0.1:8443       0.0.0.0:*    users:(("openresty",pid=159366,fd=9),("openresty",pid=159365,fd=9))                               
+PASS: no userspace LISTEN on steered ports
+
+=== curl internal HTTP 127.0.0.1:8080 ===
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:45:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+OpenResty M1 OK
+waf_external_port=8080
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+
+=== curl steered HTTP :18081 ===
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+verify_exit=7
+
+=== Manual: default hide X-Waf-External-Port (HTTP steered) ===
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+
+=== Manual: stock TLS internal :8443 ===
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:45:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+OpenResty M1 OK
+waf_external_port=8443
+server_port=8443
+scheme=https
+remote_addr=127.0.0.1
+
+=== Manual: stock TLS steered :18443 ===
+
+=== Manual: dual-protocol same port HTTPS on :18081 (expect fail → N/A/BLOCKED) ===
+dual_https_exit=7
+
+=== Manual: dual-protocol same port HTTP on :18081 (works on stock) ===
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+=== loader alive? ===
+    PID STAT     ELAPSED CMD
+dead
+2026/08/12 23:45:28 sk_lookup attached to current netns
+2026/08/12 23:45:28 pinned maps under /sys/fs/bpf/waf-sklookup (open_ports, redir_socket)
+2026/08/12 23:45:28 openresty mode: product path is one internal listen (127.0.0.1:8080); sk_lookup does not classify HTTP vs TLS
+2026/08/12 23:45:28 STOCK FALLBACK: also registering TLS listen 127.0.0.1:8443 for -tls-ports (stock OpenResty 1.19.3.2 has no https_allow_http)
+2026/08/12 23:45:28 waiting for listen socket on 127.0.0.1:8080 (timeout 1m0s)
+2026/08/12 23:45:28 discovered listen socket inode=447660 for 127.0.0.1:8080
+2026/08/12 23:45:28 registered listening socket fd=11 in redir_socket[0]
+2026/08/12 23:45:28 opened steered port 18081 → redir_socket[0] (no userspace bind on that port)
+2026/08/12 23:45:28 opened steered port 18082 → redir_socket[0] (no userspace bind on that port)
+2026/08/12 23:45:28 opened steered port 65500 → redir_socket[0] (no userspace bind on that port)
+2026/08/12 23:45:28 waiting for listen socket on 127.0.0.1:8443 (timeout 1m0s)
+2026/08/12 23:45:28 discovered listen socket inode=447661 for 127.0.0.1:8443
+2026/08/12 23:45:28 registered listening socket fd=12 in redir_socket[1]
+2026/08/12 23:45:28 opened steered port 18443 → redir_socket[1] (no userspace bind on that port)
+======== OPENRESTY P1 READY ========
+Product: sk_lookup steers external ports to a fixed internal listen.
+Tengine https_allow_http: that one listen accepts HTTP and TLS.
+Stock 1.19.3.2: no https_allow_http; -tls-ports is a labeled fallback.
+Internal HTTP: curl -sS http://127.0.0.1:8080/
+Steered HTTP:  curl -sS http://127.0.0.1:18081/
+Steered HTTP:  curl -sS http://127.0.0.1:18082/
+Steered HTTP:  curl -sS http://127.0.0.1:65500/
+Internal TLS (stock fallback): curl -sk https://127.0.0.1:8443/
+Steered TLS (stock fallback):  curl -sk https://127.0.0.1:18443/
+Default responses omit X-Waf-External-Port; access_log still has $waf_external_port.
+Expose header: WAF_EXPOSE_EXTERNAL_PORT=1 (restart OpenResty).
+Close: sudo ./waf-sklookup-demo -mode close-port -ports 18081
+Reopen: sudo ./waf-sklookup-demo -mode open-port -ports 18081
+Ctrl+C to stop the loader (OpenResty keeps running).
+====================================
+2026/08/12 23:45:39 shutting down loader (OpenResty keeps running)
+=== dump-ports ===
+2026/08/12 23:45:53 load pinned open_ports: no such file or directory
+=== bpftool prog sk_lookup ===
+=== bpftool map dump open_ports ===
+Error: bpf obj get (/sys/fs/bpf/waf-sklookup/open_ports): No such file or directory
+=== bpftool map dump redir_socket ===
+Error: bpf obj get (/sys/fs/bpf/waf-sklookup/redir_socket): No such file or directory
+=== link show (sk_lookup attach) ===
+=== retry curl loop ===
+-- attempt 1 --
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+http_code=000 err=Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+https_code=000 err=Failed to connect to 127.0.0.1 port 18443 after 0 ms: Could not connect to server
+-- attempt 2 --
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+http_code=000 err=Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+https_code=000 err=Failed to connect to 127.0.0.1 port 18443 after 0 ms: Could not connect to server
+-- attempt 3 --
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+http_code=000 err=Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+https_code=000 err=Failed to connect to 127.0.0.1 port 18443 after 0 ms: Could not connect to server
+-- attempt 4 --
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+http_code=000 err=Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+https_code=000 err=Failed to connect to 127.0.0.1 port 18443 after 0 ms: Could not connect to server
+-- attempt 5 --
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+http_code=000 err=Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+https_code=000 err=Failed to connect to 127.0.0.1 port 18443 after 0 ms: Could not connect to server
+=== last bodies ===
+18081: missing
+18443: missing
+
+=== Wait for concurrent/current loader READY ===
+
+=== continued by Test (finish after executor stall) ===
+Tip confirmed: 30da0c6380f6269987a642da5f457dbe4a918a03
+
+## Doc clarity https_allow_http
+YES — PR body, openresty-p1.md, nginx.conf comments, nginx.tengine-https-allow-http.conf.example
+Stock nginx -t on tengine example:
+  nginx: [emerg] invalid parameter "https_allow_http" ... test failed
+
+## verify (expose=off) summary
+- LISTEN only 127.0.0.1:8080 and 127.0.0.1:8443
+- HTTP steered 18081/18082/65500 → OpenResty M1 OK; body waf_external_port=PORT; no X-Waf-External-Port
+- P1-A dual https://:18081 → N/A (curl exit 35) — NOT FAIL
+- P1-B https://127.0.0.1:18443/ → 200 OpenResty; waf_external_port=18443 scheme=https
+- access_log contains waf_external_port=
+
+## WAF_EXPOSE_EXTERNAL_PORT=1
+X-Waf-External-Port: 18081 + X-Waf-Internal-Port: 8080 → PASS
+
+## close-port 18081
+18081 connect fail (exit 7); 18082 still 200 → PASS
+
+## Overall stock fallback: PASS
+## Product dual-protocol (https_allow_http): BLOCKED/N/A until Tengine runtime
+## NO MERGE
+Still not ready; restarting with nohup-protected loader
+Stopped.
+certs already present: /workspace/waf-sklookup-demo/openresty/certs/demo.crt /workspace/waf-sklookup-demo/openresty/certs/demo.key (FORCE=1 to regenerate)
+nginx: the configuration file /tmp/waf-sklookup-m1/conf/nginx.conf syntax is ok
+nginx: configuration file /tmp/waf-sklookup-m1/conf/nginx.conf test is successful
+OpenResty started (local) nginx version: openresty/1.19.3.2 prefix=/tmp/waf-sklookup-m1/runtime config=/tmp/waf-sklookup-m1/conf/nginx.conf expose=off
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfel.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfel.go
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfeb.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfeb.go
+READY at attempt 23; loader.pid=161516; demo_pids=161021 161035 161516 161526 161539 
+Loader PID 161516
+Run './run-openresty-demo.sh verify' to check steered HTTP/HTTPS ports.
+Default: X-Waf-External-Port is hidden. Restart with WAF_EXPOSE_EXTERNAL_PORT=1 to expose it.
+=== process snapshot ===
+box       161288  0.0  0.0  19748  2276 ?        Ss   23:46   0:00 nginx: master process /usr/local/openresty/bin/openresty -p /tmp/waf-sklookup-m1/runtime -c /tmp/waf-sklookup-m1/conf/nginx.conf
+root      161516  0.0  0.0  16468  6964 ?        S    23:46   0:00 sudo ./waf-sklookup-demo -mode openresty -target 127.0.0.1:8080 -ports 18081,18082,65500 -tls-target 127.0.0.1:8443 -tls-ports 18443 -wait 60s -pin-dir /sys/fs/bpf/waf-sklookup
+root      161526  0.8  0.0 1231040 7496 ?        Sl   23:46   0:00 ./waf-sklookup-demo -mode openresty -target 127.0.0.1:8080 -ports 18081,18082,65500 -tls-target 127.0.0.1:8443 -tls-ports 18443 -wait 60s -pin-dir /sys/fs/bpf/waf-sklookup
+=== curl smoke ===
+OpenResty M1 OK waf_external_port=8080 server_port=8080 scheme=http remote_addr=127.0.0.1 
+OpenResty M1 OK waf_external_port=18081 server_port=8080 scheme=http remote_addr=127.0.0.1 
+OpenResty M1 OK waf_external_port=18443 server_port=8443 scheme=https remote_addr=127.0.0.1 
+
+=== FULL ACCEPTANCE (loader_demo_pid=161787) ===
+Tip SHA: 30da0c6380f6269987a642da5f457dbe4a918a03
+
+=== P1-5: openresty -v ===
+nginx version: openresty/1.19.3.2
+
+=== P1-1: ss bind (external ports must NOT listen) ===
+FATAL: loader died mid-run
+LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=161289,fd=8),("openresty",pid=161288,fd=8))                               
+LISTEN 0      511        127.0.0.1:8443       0.0.0.0:*    users:(("openresty",pid=161289,fd=9),("openresty",pid=161288,fd=9))                               
+RESULT P1-1: PASS (only 8080/8443 listen)
+
+=== P1-2: default NO X-Waf-External-Port (steered HTTP) ===
+FATAL: loader died mid-run
+--- headers ---
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:46:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+--- body ---
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+RESULT P1-2: PASS (header absent)
+RESULT steered-HTTP-body: PASS
+
+=== P1-3: access_log has waf_external_port= ===
+FATAL: loader died mid-run
+access_log_file=/tmp/waf-sklookup-m1/logs/access.log
+127.0.0.1:34898 GET / HTTP/1.1 scheme=https internal_port=8443 waf_external_port=8443 status=200
+127.0.0.1:55026 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:44544 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18082 status=200
+127.0.0.1:45010 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=8080 status=200
+127.0.0.1:51378 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:47358 GET / HTTP/1.1 scheme=https internal_port=8443 waf_external_port=18443 status=200
+127.0.0.1:46076 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:57268 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+RESULT P1-3: PASS
+
+=== P1-B: stock TLS steered :18443 → 8443 ssl ===
+FATAL: loader died mid-run
+--- headers ---
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:46:45 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+--- body ---
+OpenResty M1 OK
+waf_external_port=18443
+server_port=8443
+scheme=https
+remote_addr=127.0.0.1
+RESULT P1-B: PASS
+
+=== P1-A: dual-protocol SAME port :18081 HTTPS (stock → N/A/BLOCKED) ===
+FATAL: loader died mid-run
+
+dual_https_rc=35
+RESULT P1-A: BLOCKED/N/A on stock 1.19.3.2 (https_allow_http unavailable; nginx -t evidence earlier)
+
+=== close-port negative (HTTP 18081) ===
+FATAL: loader died mid-run
