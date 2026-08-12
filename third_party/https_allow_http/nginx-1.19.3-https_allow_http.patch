@@ -1,0 +1,128 @@
+diff -ruN a/auto/modules b/auto/modules
+--- a/auto/modules	2026-08-12 23:51:35.638286632 +0000
++++ b/auto/modules	2026-08-12 23:51:35.670286569 +0000
+@@ -1373,6 +1373,9 @@
+     have=NGX_STREAM_UPSTREAM_ZONE . auto/have
+ fi
+ 
++# Tengine https_allow_http (ported): listen ... ssl https_allow_http;
++have=T_NGX_HTTPS_ALLOW_HTTP . auto/have
++
+ 
+ cat << END                                    > $NGX_MODULES_C
+ 
+diff -ruN a/src/http/ngx_http.c b/src/http/ngx_http.c
+--- a/src/http/ngx_http.c	2026-08-12 23:51:35.638286632 +0000
++++ b/src/http/ngx_http.c	2026-08-12 23:51:35.674286560 +0000
+@@ -1199,6 +1199,9 @@
+ #if (NGX_HTTP_V2)
+     ngx_uint_t             http2;
+ #endif
++#if (T_NGX_HTTPS_ALLOW_HTTP)
++    ngx_uint_t             https_allow_http;
++#endif
+ 
+     /*
+      * we cannot compare whole sockaddr struct's as kernel
+@@ -1234,6 +1237,9 @@
+ #if (NGX_HTTP_V2)
+         http2 = lsopt->http2 || addr[i].opt.http2;
+ #endif
++#if (T_NGX_HTTPS_ALLOW_HTTP)
++        https_allow_http = lsopt->https_allow_http || addr[i].opt.https_allow_http;
++#endif
+ 
+         if (lsopt->set) {
+ 
+@@ -1270,6 +1276,9 @@
+ #if (NGX_HTTP_V2)
+         addr[i].opt.http2 = http2;
+ #endif
++#if (T_NGX_HTTPS_ALLOW_HTTP)
++        addr[i].opt.https_allow_http = https_allow_http;
++#endif
+ 
+         return NGX_OK;
+     }
+@@ -1802,6 +1811,9 @@
+ #if (NGX_HTTP_V2)
+         addrs[i].conf.http2 = addr[i].opt.http2;
+ #endif
++#if (T_NGX_HTTPS_ALLOW_HTTP)
++        addrs[i].conf.https_allow_http = addr[i].opt.https_allow_http;
++#endif
+         addrs[i].conf.proxy_protocol = addr[i].opt.proxy_protocol;
+ 
+         if (addr[i].hash.buckets == NULL
+@@ -1867,6 +1879,9 @@
+ #if (NGX_HTTP_V2)
+         addrs6[i].conf.http2 = addr[i].opt.http2;
+ #endif
++#if (T_NGX_HTTPS_ALLOW_HTTP)
++        addrs6[i].conf.https_allow_http = addr[i].opt.https_allow_http;
++#endif
+         addrs6[i].conf.proxy_protocol = addr[i].opt.proxy_protocol;
+ 
+         if (addr[i].hash.buckets == NULL
+diff -ruN a/src/http/ngx_http_core_module.c b/src/http/ngx_http_core_module.c
+--- a/src/http/ngx_http_core_module.c	2026-08-12 23:51:35.642286624 +0000
++++ b/src/http/ngx_http_core_module.c	2026-08-12 23:51:35.674286560 +0000
+@@ -4190,6 +4190,20 @@
+             continue;
+         }
+ 
++#if (T_NGX_HTTPS_ALLOW_HTTP)
++        if (ngx_strcmp(value[n].data, "https_allow_http") == 0) {
++#if (NGX_HTTP_SSL)
++            lsopt.https_allow_http = 1;
++            continue;
++#else
++            ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
++                               "the \"https_allow_http\" parameter requires "
++                               "ngx_http_ssl_module");
++            return NGX_CONF_ERROR;
++#endif
++        }
++#endif
++
+         ngx_conf_log_error(NGX_LOG_EMERG, cf, 0,
+                            "invalid parameter \"%V\"", &value[n]);
+         return NGX_CONF_ERROR;
+diff -ruN a/src/http/ngx_http_core_module.h b/src/http/ngx_http_core_module.h
+--- a/src/http/ngx_http_core_module.h	2026-08-12 23:51:35.646286616 +0000
++++ b/src/http/ngx_http_core_module.h	2026-08-12 23:51:35.670286569 +0000
+@@ -82,6 +82,9 @@
+     unsigned                   reuseport:1;
+     unsigned                   so_keepalive:2;
+     unsigned                   proxy_protocol:1;
++#if (T_NGX_HTTPS_ALLOW_HTTP)
++    unsigned                   https_allow_http:1;
++#endif
+ 
+     int                        backlog;
+     int                        rcvbuf;
+@@ -238,6 +241,9 @@
+     unsigned                   ssl:1;
+     unsigned                   http2:1;
+     unsigned                   proxy_protocol:1;
++#if (T_NGX_HTTPS_ALLOW_HTTP)
++    unsigned                   https_allow_http:1;
++#endif
+ };
+ 
+ 
+diff -ruN a/src/http/ngx_http_request.c b/src/http/ngx_http_request.c
+--- a/src/http/ngx_http_request.c	2026-08-12 23:51:35.650286609 +0000
++++ b/src/http/ngx_http_request.c	2026-08-12 23:51:35.674286560 +0000
+@@ -770,6 +770,11 @@
+         ngx_log_debug0(NGX_LOG_DEBUG_HTTP, rev->log, 0, "plain http");
+ 
+         c->log->action = "waiting for request";
++#if (T_NGX_HTTPS_ALLOW_HTTP)
++        if (hc->addr_conf->https_allow_http) {
++            hc->ssl = 0;
++        }
++#endif
+ 
+         rev->handler = ngx_http_wait_request_handler;
+         ngx_http_wait_request_handler(rev);

@@ -192,3 +192,19 @@ Toy mode is unchanged (`-mode toy`). It rejects `-tls-ports`.
 - M2 control plane / M3 perf matrix
 - Multi-worker reuseport sockmap
 - Production certificates / SNI matrix
+
+## Patched OpenResty 1.19.3.2 (`https_allow_http`)
+
+Stock image cannot parse the listen flag. A durable port of Tengine’s feature lives in
+[`third_party/https_allow_http/`](../third_party/https_allow_http/) (patch + build script).
+
+```bash
+./third_party/https_allow_http/build-openresty-hah.sh
+export OPENRESTY_PREFIX=/usr/local/openresty-hah   # separate from stock /usr/local/openresty
+$OPENRESTY_PREFIX/bin/openresty -V
+# smoke conf uses: listen 127.0.0.1:8443 ssl https_allow_http;
+```
+
+On this build, same-port HTTP + HTTPS both return 200 (no 497). Use the product loader
+shape (`-ports` + `-target` only; no `-tls-ports`) with
+`openresty/nginx.tengine-https-allow-http.conf.example`.
