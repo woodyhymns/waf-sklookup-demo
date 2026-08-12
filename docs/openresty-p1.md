@@ -184,6 +184,7 @@ Toy mode is unchanged (`-mode toy`). It rejects `-tls-ports`.
 - No userspace bind on external ports
 - Demo certs: `make certs` → `openresty/certs/demo.{crt,key}` (keys gitignored, labeled demo-only)
 - Compatible with stock OpenResty **1.19.3.2** config + standard Lua only (no private nginx modules). `https_allow_http` is Tengine-only and lives in the example file, not the live conf.
+- **Go loader is the reference implementation** (`loader.go`). P1/M3 continue here. A Rust rewrite is later, only after perf is OK + re-test — not this PR.
 
 ## Out of scope
 

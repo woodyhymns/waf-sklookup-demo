@@ -146,7 +146,7 @@ sudo ./waf-sklookup-demo -mode open-port -ports 18081
 | Path | Role |
 |------|------|
 | `dispatch.bpf.c` | `sk_lookup` program + `open_ports` / `redir_socket` maps |
-| `loader.go` | load/attach, register listener FD, toy HTTP or OpenResty sockmap mode |
+| `loader.go` | **Reference implementation** (Go). Load/attach, register listener FD, toy HTTP or OpenResty sockmap. A Rust rewrite is later — only after perf is OK and this path is re-tested. |
 | `openresty/` | OpenResty 1.19.3.2 config + Lua for `$waf_external_port`; Tengine example listen |
 | `openresty/certs/` | `make certs` demo-only self-signed material (keys gitignored) |
 | `run-openresty-demo.sh` | Start/verify/stop OpenResty demo (HTTP + stock TLS fallback) |
@@ -160,7 +160,7 @@ sudo ./waf-sklookup-demo -mode open-port -ports 18081
 
 ## Relation to the WAF plan
 
-- **End state:** BPF sk_lookup → OpenResty (TLS + Lua WAF), with Tengine `https_allow_http` so one listen takes HTTP and TLS. Toy mode is the kernel steering proof; M1 is HTTP wiring; P1 adds TLS + header policy.
+- **End state:** BPF sk_lookup → OpenResty (TLS + Lua WAF), with Tengine `https_allow_http` so one listen takes HTTP and TLS. Toy mode is the kernel steering proof; M1 is HTTP wiring; P1 adds TLS + header policy. **P1/M3 stay on this Go loader** (reference implementation). A Rust loader rewrite is explicitly later, only after perf is OK and the Go path is re-tested.
 - **Transition:** PROXY + thin-accept (see `docs/`). Product semantics first; switch data plane when perf gates pass.
 - Design notes live in `docs/`; the Notion summary page links this repo as the runnable demo.
 
@@ -171,6 +171,7 @@ This is a **kernel steering proof + M1 wiring**, not a full WAF integration. Sti
 - M2 hot-add API / control plane
 - M3 performance matrix ([docs/acceptance-m3.md](docs/acceptance-m3.md) stub is in this PR, not run)
 - Tengine runtime in the default helper (example conf + test plan only)
+- Rust loader rewrite (later, after perf + re-test of this Go path)
 - multi-worker reuseport sockmap
 
 ## License
