@@ -275,3 +275,7 @@ If all six are true, reproduction succeeded.
 - This pack is a **kernel steering proof**, not a full WAF/OpenResty integration.
 - No production customer data, no production deploys, no GitHub push from this pack.
 - Design context (thin-accept vs sk_lookup, perf notes): see sibling docs under `docs/`.
+
+## 7. OpenResty M1 wiring
+
+The toy HTTP path above remains valid. For **sk_lookup → OpenResty** (fixed internal listen + `$waf_external_port`), follow **[docs/openresty-m1.md](openresty-m1.md)** and the QA list **[docs/acceptance-m1.md](acceptance-m1.md)**. Helper: `./run-openresty-demo.sh start && ./run-openresty-demo.sh verify`.

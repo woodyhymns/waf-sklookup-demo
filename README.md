@@ -4,9 +4,9 @@ Minimal demo: **one** userspace `listen()`, many extra TCP ports opened only via
 
 Useful as a building block for WAF / OpenResty-style **runtime dynamic non-standard listen ports** on kernels that support `sk_lookup` (Linux ≥ 5.9; HCE 2.0 / kernel 5.10 qualifies).
 
-**Goal of this repo:** prove sk_lookup can steer traffic to a single listening socket without binding the extra ports. It is **not** a full OpenResty/WAF integration.
+**M1 (this branch):** steer those ports into **OpenResty 1.19.3.2** on a fixed internal listen (`127.0.0.1:8080`) and expose the client destination as **`$waf_external_port`**. The original toy HTTP server remains the default (`-mode toy`).
 
-## 10-minute quick start
+## 10-minute quick start (toy HTTP)
 
 ```bash
 # 0) Host check (must be a real Linux with sk_lookup — not macOS / most CI sandboxes)
@@ -41,13 +41,37 @@ ss -lntp | grep -E '18081|18082|65500' || echo "no userspace listeners (expected
 
 Without the BPF program attached, steered-port curls should fail.
 
+## M1: sk_lookup → OpenResty
+
+HTTP-first wiring. OpenResty binds **only** `127.0.0.1:8080`; the loader registers that listen FD into the sockmap and opens extra ports in BPF.
+
+```bash
+export CGO_ENABLED=0
+# OpenResty 1.19.3.2 via docker (host network) or local prefix:
+#   docker compose -f openresty/docker-compose.yml up -d
+#   # or: OPENRESTY_PREFIX=/usr/local/openresty
+./run-openresty-demo.sh start
+./run-openresty-demo.sh verify
+# M1-4: drop one steered port while loader stays up
+./run-openresty-demo.sh close-port 18081
+curl -sS --max-time 3 http://127.0.0.1:18081/   # expect fail
+curl -sS http://127.0.0.1:18082/                # still OpenResty
+./run-openresty-demo.sh stop
+```
+
+Do **not** use `$server_port` as the business/external port. After `sk_lookup`, it is often the internal listen (`8080`). Use `$waf_external_port` (also echoed as `X-Waf-External-Port`).
+
+Full design, ss/curl checks, and TLS follow-up notes: **[docs/openresty-m1.md](docs/openresty-m1.md)**. Acceptance checklist: **[docs/acceptance-m1.md](docs/acceptance-m1.md)**.
+
 ## Idea
 
 ```
-Client → :18081 / :18082 / :65500  ──sk_lookup──►  same listening socket on :18080
+Client → :18081 / :18082 / :65500  ──sk_lookup──►  same listening socket
+         toy: Go HTTP on :18080
+         M1:  OpenResty on 127.0.0.1:8080
 ```
 
-- Real bind: `127.0.0.1:18080`
+- Real bind: toy `:18080` or OpenResty `:8080`
 - Steered ports (default): `18081`, `18082`, `65500` — present only in a BPF hash map
 - Removing a map entry closes that external port without touching nginx/OpenResty config
 
@@ -57,7 +81,8 @@ Client → :18081 / :18082 / :65500  ──sk_lookup──►  same listening so
 |------|--------|
 | Linux + `sk_lookup` | Kernel ≥ 5.9; HCE 2.0 / 5.10 OK. Confirm with `uname -r` / `bpftool feature` |
 | Privileges | Root, or `CAP_BPF` + `CAP_NET_ADMIN` (and usually ability to attach to current netns) |
-| Build tools | Go **1.22+**, clang, llvm, libbpf headers (`libbpf-dev`, `linux-libc-dev`) |
+| Build tools | Go **1.22+**, clang, linux headers (`linux-libc-dev`). `CGO_ENABLED=0` |
+| OpenResty (M1) | **1.19.3.2** — `openresty/openresty:1.19.3.2-bionic` or a local prefix |
 | Network | Demo listens on **loopback**; run on a host/VM where BPF attach is allowed |
 
 ```bash
@@ -65,12 +90,19 @@ Client → :18081 / :18082 / :65500  ──sk_lookup──►  same listening so
 sudo apt-get install -y clang llvm libbpf-dev linux-libc-dev golang-go
 ```
 
-`./run.sh` runs `go generate` (cilium/ebpf `bpf2go`) then `go build`, then `sudo` to start the binary.
+`./run.sh` runs `go generate` (cilium/ebpf `bpf2go`) then `go build`, then `sudo` to start the toy binary.
 
 ## Flags
 
 ```bash
-sudo ./waf-sklookup-demo -listen 127.0.0.1:18080 -ports 18081,18082,65500
+# Toy (default)
+sudo ./waf-sklookup-demo -mode toy -listen 127.0.0.1:18080 -ports 18081,18082,65500
+
+# OpenResty M1 (OpenResty must already listen on -target)
+sudo ./waf-sklookup-demo -mode openresty -target 127.0.0.1:8080 -ports 18081,18082,65500
+
+# Drop a steered port (loader must still be running; maps pinned)
+sudo ./waf-sklookup-demo -mode close-port -ports 18081
 ```
 
 ## Troubleshooting
@@ -78,33 +110,38 @@ sudo ./waf-sklookup-demo -listen 127.0.0.1:18080 -ports 18081,18082,65500
 | Symptom | Likely cause |
 |---------|----------------|
 | `load BPF` / `attach sk_lookup` fails | Not root / missing caps; kernel too old; sk_lookup disabled; restricted container |
-| `go generate` / `bpf2go` fails | Missing clang/llvm or libbpf headers |
-| Steered `curl` fails while `:18080` works | BPF not attached, or port not in `-ports` map |
+| `go generate` / `bpf2go` fails | Missing clang or kernel headers (`linux-libc-dev`); `asm/types.h` via `-I/usr/include/$(uname -m)-linux-gnu` |
+| Steered `curl` fails while internal port works | BPF not attached, or port not in `-ports` map |
 | Works on bare metal, fails in Docker | Many containers block BPF / netns attach — use a privileged VM or real node |
+| `$waf_external_port` empty | See error.log; do not substitute `$server_port` |
 
 ## Layout
 
 | Path | Role |
 |------|------|
 | `dispatch.bpf.c` | `sk_lookup` program + `open_ports` / `redir_socket` maps |
-| `loader.go` | load/attach, register listener FD, open ports, tiny HTTP server |
+| `loader.go` | load/attach, register listener FD, toy HTTP or OpenResty sockmap mode |
+| `openresty/` | OpenResty 1.19.3.2 config + Lua for `$waf_external_port` |
+| `run-openresty-demo.sh` | Start/verify/stop M1 demo |
+| `docs/openresty-m1.md` | M1 design, reproduce, out of scope |
+| `docs/acceptance-m1.md` | QA checklist (M1-1…M1-5 required) |
 | `docs/design-thin-accept-openresty.md` | Transition design: PROXY v2 + thin-accept + OpenResty TLS |
 | `docs/perf-deep-compare.md` | Reload / PROXY / TPROXY / sk_lookup performance comparison |
 
 ## Relation to the WAF plan
 
-- **End state:** BPF sk_lookup → OpenResty (TLS + Lua WAF). This demo is the kernel steering proof.
+- **End state:** BPF sk_lookup → OpenResty (TLS + Lua WAF). Toy mode is the kernel steering proof; M1 is the first OpenResty wiring.
 - **Transition:** PROXY + thin-accept (see `docs/`). Product semantics first; switch data plane when perf gates pass.
 - Design notes live in `docs/`; the Notion summary page links this repo as the runnable demo.
 
 ## Not production
 
-This is a **kernel steering proof**, not a full WAF integration. Production path typically still needs:
+This is a **kernel steering proof + M1 wiring**, not a full WAF integration. Still out of scope here:
 
-- preserve original dest port for logging / ACL (`$waf_external_port` or equivalent)
-- OpenResty / nginx worker model + TLS termination
-- safe map update API (add/remove port under load)
-- long-term: tubular-style sk_lookup vs short-term PROXY v2 thin-accept (see `docs/`)
+- M2 hot-add API / control plane
+- M3 performance matrix
+- full TLS parity on steered ports (documented as follow-up)
+- multi-worker reuseport sockmap
 
 ## License
 

@@ -1,0 +1,15 @@
+services:
+  openresty:
+    image: openresty/openresty:1.19.3.2-bionic
+    network_mode: host
+    volumes:
+      - ./:/etc/openresty/waf-m1:ro
+    command:
+      - /bin/bash
+      - -lc
+      - |
+        set -euo pipefail
+        mkdir -p /tmp/waf-m1-logs
+        sed 's|logs/|/tmp/waf-m1-logs/|g' /etc/openresty/waf-m1/nginx.conf > /tmp/waf-m1-nginx.conf
+        sed -i 's|$$prefix/lua|/etc/openresty/waf-m1/lua|g' /tmp/waf-m1-nginx.conf
+        exec openresty -p /usr/local/openresty/nginx -c /tmp/waf-m1-nginx.conf -g 'daemon off;'
