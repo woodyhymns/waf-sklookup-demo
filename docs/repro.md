@@ -278,4 +278,4 @@ If all six are true, reproduction succeeded.
 
 ## 7. OpenResty M1 wiring
 
-The toy HTTP path above remains valid. For **sk_lookup → OpenResty** (fixed internal listen + `$waf_external_port`), follow **[docs/openresty-m1.md](openresty-m1.md)** and the QA list **[docs/acceptance-m1.md](acceptance-m1.md)**. Helper: `./run-openresty-demo.sh start && ./run-openresty-demo.sh verify`.
+The toy HTTP path above remains valid. For **sk_lookup → OpenResty** (fixed internal listen + `$waf_external_port`), follow **[docs/openresty-m1.md](openresty-m1.md)** (M1 HTTP) and **[docs/openresty-p1.md](openresty-p1.md)** (P1 TLS + header policy). Helper: `./run-openresty-demo.sh start && ./run-openresty-demo.sh verify`. HTTPS on the stock image uses `curl -k` against the fallback TLS port.

@@ -7,3 +7,7 @@
 *.o
 /bin/
 *.deb
+openresty/certs/*.key
+openresty/certs/*.crt
+openresty/certs/*.pem
+!openresty/certs/README.md

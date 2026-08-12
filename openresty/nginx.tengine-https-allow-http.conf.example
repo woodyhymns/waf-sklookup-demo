@@ -1,0 +1,71 @@
+# Production listen pattern — Tengine 3.1.0+ (https_allow_http).
+# NOT valid on stock OpenResty 1.19.3.2 / openresty/openresty:1.19.3.2-bionic.
+#
+# Verified syntax (Tengine 3.1.0, alibaba/tengine#1751, listen flag — not a
+# separate `https_allow_http on;` directive):
+#
+#   listen <addr>:<port> ssl https_allow_http;
+#
+# Product data plane:
+#   Client → steered external port
+#        → sk_lookup (open_ports → one redir_socket slot)
+#        → this single internal listen
+#        → Tengine peeks TLS vs plaintext and serves both
+#
+# sk_lookup does not know HTTP vs TLS. Do not split -ports vs -tls-ports
+# when this listen is in use: register only -target and -ports.
+#
+# Copy the listen line into the engine config on a Tengine build; keep the
+# rest of the server{} (Lua $waf_external_port, log_format) from nginx.conf.
+
+worker_processes 1;
+error_log logs/error.log info;
+pid logs/nginx.pid;
+
+env WAF_EXPOSE_EXTERNAL_PORT;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    default_type  application/octet-stream;
+    lua_package_path "$prefix/lua/?.lua;;";
+    init_by_lua_block { require "resty.core" }
+
+    log_format waf_m1 '$remote_addr:$remote_port $request '
+                      'scheme=$scheme '
+                      'internal_port=$server_port waf_external_port=$waf_external_port '
+                      'status=$status';
+    access_log logs/access.log waf_m1;
+
+    server {
+        # Tengine 3.1.0+: one listen, both plaintext HTTP and TLS.
+        listen 127.0.0.1:8080 ssl https_allow_http;
+        server_name waf-p1;
+
+        ssl_certificate     certs/demo.crt;
+        ssl_certificate_key certs/demo.key;
+        ssl_protocols       TLSv1.2 TLSv1.3;
+
+        set $waf_external_port '';
+        set $waf_expose_external_port '';
+
+        access_by_lua_block {
+            ngx.var.waf_external_port = require("waf.external_port").resolve()
+        }
+
+        location / {
+            content_by_lua_block {
+                local port = ngx.var.waf_external_port or ""
+                require("waf.headers").apply_debug_headers(port)
+                ngx.header.content_type = "text/plain"
+                ngx.say("OpenResty M1 OK")
+                ngx.say("waf_external_port=" .. port)
+                ngx.say("server_port=" .. (ngx.var.server_port or ""))
+                ngx.say("scheme=" .. (ngx.var.scheme or ""))
+                ngx.say("remote_addr=" .. (ngx.var.remote_addr or ""))
+            }
+        }
+    }
+}

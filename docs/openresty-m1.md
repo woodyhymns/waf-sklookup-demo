@@ -2,7 +2,9 @@
 
 This milestone wires the existing BPF `sk_lookup` loader to **OpenResty 1.19.3.2** on a fixed internal listen (`127.0.0.1:8080`). External steered ports (for example `18081`, `18082`, `65500`) reach OpenResty **without** userspace `bind()` on those ports.
 
-Aligns with [docs/acceptance-m1.md](acceptance-m1.md) core items **M1-1 … M1-5**. TLS handshake (M1-6) is documented as follow-up; this PR is HTTP-first.
+Aligns with [docs/acceptance-m1.md](acceptance-m1.md) core items **M1-1 … M1-5**.
+
+**P1 follow-up:** TLS termination in OpenResty, Tengine `https_allow_http` (one listen, HTTP+TLS), and hiding `X-Waf-External-Port` by default — see **[docs/openresty-p1.md](openresty-p1.md)**. Do not treat dual `-ports` / `-tls-ports` as the production model.
 
 ## Architecture
 
@@ -31,7 +33,7 @@ OpenResty declares `$waf_external_port` with the stock rewrite-module `set` dire
 2. **Fallback:** `ngx.req.socket(true):getfd()` + LuaJIT FFI `getsockname(2)` (same kernel fact: connection local port ≠ listen port).
 3. **Not used:** `$server_port` — after sk_lookup it is often the internal listen (`8080`). An empty `$waf_external_port` is a hard failure, not a silent fallback to `$server_port`.
 
-The response sets `X-Waf-External-Port` and the access log records `waf_external_port=...` next to `internal_port=$server_port` so the two can be compared.
+The response body and access log record `waf_external_port=...` next to `internal_port=$server_port` so the two can be compared. P1 hides response header `X-Waf-External-Port` unless `WAF_EXPOSE_EXTERNAL_PORT=1`.
 
 The toy Go demo already showed `http_local_addr=127.0.0.1:18081` on steered connections; M1 reuses that kernel behavior inside OpenResty.
 
@@ -154,7 +156,7 @@ See [docs/repro.md](repro.md) for the original kernel-steering pack.
 
 - **Version:** 1.19.3.2 (`openresty/openresty:1.19.3.2-bionic`)
 - **Workers:** `worker_processes 1` — reuseport / multi-worker sockmap is left for later (assign-to-group behavior is easy to get wrong)
-- **TLS:** not required for this HTTP PR. Same steering would apply to `listen 127.0.0.1:8443 ssl` as a follow-up (M1-6). Do not treat this PR as TLS-parity complete.
+- **TLS:** not in this HTTP milestone. P1 documents production Tengine `https_allow_http` (one listen, both protocols) and a stock 1.19.3.2 dual-listen **fallback**. See [openresty-p1.md](openresty-p1.md).
 
 | Path | Purpose |
 |------|---------|
@@ -166,19 +168,21 @@ See [docs/repro.md](repro.md) for the original kernel-steering pack.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-mode` | `toy` | `toy`, `openresty`, `close-port`, `dump-ports` |
+| `-mode` | `toy` | `toy`, `openresty`, `close-port`, `open-port`, `dump-ports` |
 | `-listen` | `127.0.0.1:18080` | Toy mode bind address |
-| `-target` | `127.0.0.1:8080` | OpenResty internal listen to register |
-| `-ports` | `18081,18082,65500` | Steered ports; `close-port` deletes these keys |
+| `-target` | `127.0.0.1:8080` | OpenResty primary internal listen (sockmap slot 0) |
+| `-ports` | `18081,18082,65500` | Steered ports for the primary listen; `close-port` / `open-port` delete/insert these keys |
+| `-tls-target` | `127.0.0.1:8443` | Stock 1.19.3.2 TLS fallback listen (slot 1); unused with Tengine `https_allow_http` |
+| `-tls-ports` | empty | Stock fallback steered ports → `-tls-target`. Empty = product path |
 | `-wait` | `60s` | Wait for OpenResty listen before failing |
-| `-pin-dir` | `/sys/fs/bpf/waf-sklookup` | Pinned maps for bpftool / close-port |
+| `-pin-dir` | `/sys/fs/bpf/waf-sklookup` | Pinned maps for bpftool / close-port / open-port |
 
 ## Out of scope (this PR)
 
 - M2 hot-add API / control plane push
 - M3 performance / memory-vs-port-scale matrix ([docs/acceptance-m3.md](acceptance-m3.md))
 - OpenResty reload sockmap re-registration automation
-- Full TLS parity (8443 steered HTTPS)
+- Full TLS parity on stock 1.19.3.2 as a single listen (requires Tengine `https_allow_http`; see P1)
 - Custom nginx C modules
 - Multi-worker reuseport sockmap
 
