@@ -1,0 +1,8 @@
+/dispatch_bpfel.go
+/dispatch_bpfel.o
+/dispatch_bpfeb.go
+/dispatch_bpfeb.o
+/sk-lookup-demo
+/waf-sklookup-demo
+*.o
+/bin/
