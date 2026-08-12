@@ -132,6 +132,7 @@ sudo ./waf-sklookup-demo -mode close-port -ports 18081
 | `run-openresty-demo.sh` | Start/verify/stop M1 demo |
 | `docs/openresty-m1.md` | M1 design, reproduce, out of scope |
 | `docs/acceptance-m1.md` | QA checklist (M1-1…M1-5 required) |
+| `docs/acceptance-m3.md` | M3 stub only (30K/60K memory ladder); not executed in this PR |
 | `docs/design-thin-accept-openresty.md` | Transition design: PROXY v2 + thin-accept + OpenResty TLS |
 | `docs/perf-deep-compare.md` | Reload / PROXY / TPROXY / sk_lookup performance comparison |
 
@@ -146,7 +147,7 @@ sudo ./waf-sklookup-demo -mode close-port -ports 18081
 This is a **kernel steering proof + M1 wiring**, not a full WAF integration. Still out of scope here:
 
 - M2 hot-add API / control plane
-- M3 performance matrix
+- M3 performance matrix ([docs/acceptance-m3.md](docs/acceptance-m3.md) stub is in this PR, not run)
 - full TLS parity on steered ports (documented as follow-up)
 - multi-worker reuseport sockmap
 

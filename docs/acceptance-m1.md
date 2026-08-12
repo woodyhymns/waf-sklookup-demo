@@ -121,7 +121,7 @@ openresty -v 2>&1   # nginx version: openresty/1.19.3.2
 ## 结论栏（执行后填写）
 
 - **总体**: ☐ PASS · ☐ FAIL · ☐ BLOCKED
-- **PR**: 
+- **PR**: https://github.com/woodyhymns/waf-sklookup-demo/pull/1
 - **OpenResty 版本字符串**: 
 - **内核**: 
 - **阻塞 / 交还 Repo 的项**: 
