@@ -8,7 +8,7 @@ Someone else following this file should see the same success/failure contrast.
 |------|----------------|------------------------|
 | **A. M1 OpenResty (HTTP)** | sk_lookup → OpenResty `127.0.0.1:8080` + `$waf_external_port` | **Primary — run this** |
 | **B. Toy Go HTTP** | Kernel steering only (no OpenResty) | Still default binary mode; secondary |
-| **C. P1 HTTPS** | Steered TLS into OpenResty SSL listen | **Skeleton only** — fill when Repo P1 branch lands |
+| **C. P1 dual-protocol listen** | Same internal listen accepts **HTTP + HTTPS** (prod: Tengine `https_allow_http`) | **Skeleton only** — fill when Repo P1 branch lands |
 
 QA checklist: [acceptance-m1.md](acceptance-m1.md). Design notes: [openresty-m1.md](openresty-m1.md). Evidence from Test: [acceptance-m1-run.log](acceptance-m1-run.log).
 
@@ -275,103 +275,120 @@ Do **not** treat this path as M1 acceptance.
 
 ---
 
-## C. P1 HTTPS — skeleton (fill when Repo branch lands)
+## C. P1 dual-protocol listen — skeleton (fill when Repo branch lands)
 
-> **Status:** placeholder. Do not mark PASS until Repo ships TLS listen + loader/docs on the P1 feature branch (working name: `feat/product-p1-tls-and-headers` or successor). Commands below are intentional stubs.
+> **Status:** placeholder. Do not mark PASS until Repo ships P1 on `feat/product-p1-tls-and-headers` (or successor). Commands below are intentional stubs.
+>
+> **Product model (Alex):** production OpenResty includes Tengine **`https_allow_http`**. **Each listen can accept both cleartext HTTP and TLS** on that same socket. sk_lookup only steers external ports to the fixed internal listen(s); **protocol discrimination is in OpenResty/Tengine**, not via separate HTTP vs TLS internal ports.
+>
+> **Stock OpenResty 1.19.3.2** may lack `https_allow_http`. P1 docs/PR must call out that gap vs the stock image and how the demo approximates it (config snippet + test plan). Do **not** treat “8080 = HTTP only / 8443 = TLS only” as the product architecture (that is at most a stock-compat fallback, if present at all).
 
 ### C.1 Intent (product)
 
 ```
-Client :18081 / :8443-style steered HTTPS
-        │  sk_lookup (same open_ports / redir_socket idea)
+Client :18081  ── HTTP or HTTPS (same external port / same steered map entry)
+        │  sk_lookup → fixed internal listen only
         ▼
-OpenResty listen 127.0.0.1:<ssl_internal> ssl   # TLS terminates here
-        │  $waf_external_port still = client destination
+OpenResty/Tengine  127.0.0.1:<internal>
+        listen ... ssl;
+        https_allow_http on;   # production (Tengine); stock 1.19.3.2 may need documented fallback
+        │  TLS terminates here when client speaks TLS; cleartext HTTP also accepted on same listen
+        │  $waf_external_port = client destination (never use $server_port as business port)
         ▼
-Handshake + cert/SNI/ALPN look like “direct old architecture”
+access_log / internals see $waf_external_port
 ```
 
-Related acceptance: M1-6 (TLS handshake on opened external ports) was **N/A** on the HTTP-first M1 PR.
+Related: M1 on main is **HTTP-first** to `:8080` (section A). P1 adds dual-protocol semantics + header policy (default **hide** `X-Waf-External-Port`; enable via flag/env for acceptance). M1-6 TLS was **N/A** on the HTTP-first M1 PR.
 
 ### C.2 Prerequisites (expected — confirm on P1 PR)
 
 | Item | Expected | Confirmed on P1? |
 |------|----------|------------------|
-| OpenResty SSL listen | e.g. `127.0.0.1:8443 ssl` (TBD by Repo) | ☐ |
-| Server cert / key path | TBD in `openresty/` | ☐ |
-| Steered HTTPS ports | TBD (may reuse 18081… or dedicated) | ☐ |
-| Loader flags | TBD (`-target` points at SSL listen?) | ☐ |
-| Verify helper | TBD (`run-openresty-demo.sh` HTTPS subcommands?) | ☐ |
+| Internal listen model | **One** (or few) fixed internal listen(s); **not** HTTP-port vs TLS-port hard split | ☐ |
+| `https_allow_http` | Production: on (Tengine). Stock 1.19.3.2: documented gap + demo approximation | ☐ |
+| Server cert / key | Demo self-signed under `openresty/certs/` or `make certs` | ☐ |
+| Steered ports | Same `open_ports` map; client may use `http://` or `https://` to steered port | ☐ |
+| Loader flags | Still register internal listen FD(s); no per-protocol sockmap split required for product story | ☐ |
+| Header policy | Default: **no** `X-Waf-External-Port`; `$waf_external_port` still in access_log; flag/env to expose for QA | ☐ |
+| Verify helper | TBD (`run-openresty-demo.sh` dual-protocol checks) | ☐ |
 
 ### C.3 Steps (TO FILL — do not run as-is)
 
 ```bash
 # 1) Checkout Repo P1 branch / PR
-# git fetch origin && git checkout <p1-branch>
+# git fetch origin && git checkout feat/product-p1-tls-and-headers
 
 # 2) Build
 # export CGO_ENABLED=0
 # make build
 
-# 3) Start OpenResty with SSL internal listen + loader
-# ./run-openresty-demo.sh start          # or: start-https / make run-openresty-https
-# sudo ./waf-sklookup-demo -mode openresty -target 127.0.0.1:<ssl_port> -ports <list>
+# 3) Start OpenResty (dual-protocol listen + certs) + loader
+# ./run-openresty-demo.sh start          # flags TBD by Repo
+# sudo ./waf-sklookup-demo -mode openresty -target 127.0.0.1:<internal> -ports 18081,18082,65500
 
-# 4) Handshake + business port
-# curl -vk https://127.0.0.1:<steered_port>/
-# Expect: TLS OK; cert from OpenResty; body/header still carry waf_external_port=<steered_port>
-# Expect: NOT toy HTTP; Server: openresty/...
+# 4a) Cleartext on a steered port (same internal listen)
+# curl -sS -D- http://127.0.0.1:18081/
+# Expect: OpenResty body; waf_external_port=18081 in log; X-Waf-External-Port absent unless flag/env on
+
+# 4b) TLS on a steered port (same map entry / same internal listen)
+# curl -vk https://127.0.0.1:18081/
+# Expect: TLS OK; cert from OpenResty; same $waf_external_port semantics; not toy HTTP
 
 # 5) Bind proof
-# ss -lntp | rg ':(8443|<steered>)\b'
-# Expect: LISTEN only on internal SSL listen; no userspace bind on steered ports
+# ss -lntp | rg ':(<internal>|18081|18082|65500)\b'
+# Expect: LISTEN only on internal listen; no userspace bind on steered ports
 
-# 6) Negative: close-port one HTTPS steered port; neighbor still handshakes
-# ./run-openresty-demo.sh close-port <port>
-# curl -vk --max-time 3 https://127.0.0.1:<closed>/   # expect fail
+# 6) Negative: close-port one steered port; neighbor still serves HTTP and HTTPS
+# ./run-openresty-demo.sh close-port 18081
+# curl -sS --max-time 3 http://127.0.0.1:18081/    # expect fail
+# curl -vk --max-time 3 https://127.0.0.1:18081/  # expect fail
+# curl -sS http://127.0.0.1:18082/                 # still 200
 ```
 
 ### C.4 Expected samples (TO FILL)
 
-**Success — handshake**
+**Success — cleartext + TLS on same steered port**
 
 ```text
-# paste: curl -vk excerpt (TLS version, subject CN/SAN, ALPN)
-# paste: response headers including X-Waf-External-Port
+# paste: http:// steered response (no X-Waf-External-Port by default)
+# paste: curl -vk https:// steered excerpt (TLS version, CN/SAN, ALPN)
+# paste: access_log lines with waf_external_port=<steered>
 ```
 
 **Success — bind**
 
 ```text
-# paste: ss -lntp showing only internal SSL listen
+# paste: ss -lntp showing only internal listen (dual-protocol), not steered ports
 ```
 
 **Failure**
 
 ```text
 # paste: connect fail after close-port / unopened port
-# paste: cert mismatch or wrong Server header if mis-wired
+# paste: stock image without https_allow_http — documented limitation / fallback behavior
 ```
 
 ### C.5 P1 pitfalls (draft)
 
 | Symptom | Likely cause | Notes |
 |---------|--------------|-------|
-| HTTP verify passes, HTTPS fails | SSL listen not registered in sockmap | Loader `-target` must be the SSL listen FD |
+| Docs still say 8080=HTTP / 8443=TLS only | Stale product model | Prefer `https_allow_http` one-listen story; label any split as stock fallback |
+| HTTPS fails on stock 1.19.3.2 | No `https_allow_http` | Expected gap — document; do not pretend stock == production |
 | `$waf_external_port` wrong under TLS | Lua path only tested on cleartext | Re-verify `/proc` 4-tuple after SSL |
-| SNI / ALPN mismatch vs old arch | Wrong `ssl_certificate` / listen config | Compare to baseline direct `:443` |
-| Helper still curls `http://` | Docs/scripts not updated | Replace scheme in verify |
+| `X-Waf-External-Port` always present | Header gate missing | Default hide; flag/env for acceptance only |
+| SNI / ALPN mismatch vs old arch | Wrong `ssl_certificate` / listen config | Compare to baseline direct listen |
 
 ### C.6 P1 checklist (empty until Repo lands)
 
-- [ ] Internal SSL listen only in `ss`
-- [ ] `curl -vk https://127.0.0.1:<steered>/` handshake OK
-- [ ] Cert / SNI / ALPN acceptable vs baseline
-- [ ] `X-Waf-External-Port` / `$waf_external_port` = steered port (≠ internal SSL port)
-- [ ] close-port negative on one HTTPS steered port
-- [ ] No toy HTTP body on HTTPS path
+- [ ] Internal listen only in `ss` (no steered binds)
+- [ ] Same steered port: `http://` and `https://` both hit OpenResty (per P1 demo capability)
+- [ ] PR/docs state production `https_allow_http` vs stock 1.19.3.2 difference
+- [ ] Default response has **no** `X-Waf-External-Port`; log still has `$waf_external_port`
+- [ ] With flag/env, header appears for QA
+- [ ] close-port negative; neighbor still works
+- [ ] No toy HTTP body on either path
 
-When Repo publishes the branch, replace every `TBD` / `TO FILL` in this section with concrete flags, ports, and pasted samples; keep section A unchanged unless flags diverge.
+When Repo publishes P1, replace every `TBD` / `TO FILL` here with concrete flags, ports, and pasted samples; keep section A as the HTTP-first main@3487db5 path unless flags fully supersede it.
 
 ---
 
