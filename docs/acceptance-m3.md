@@ -101,11 +101,46 @@ Test 可先准备并行 harness 脚本骨架；下列由 **Repo** 暴露后才�
 OPENRESTY_PREFIX=/usr/local/openresty ./scripts/accept-m1.sh
 ```
 
+## 表 C — Loader 实现对照（Go vs Rust · 骨架）
+
+**预告（Json / Alex）**: M3 以 **Go loader** 先跑通后，再做 **Rust loader 复测**（同指标对比）。  
+**现在先别跑 Rust** — 仅留列位 / 复跑章节；两轮共用表 A/B 的负载模型与 OpenResty **1.19.3.2** 路径。
+
+### C1 同档并排（建议至少 baseline + 30K + 60K）
+
+| 端口档 | 实现 | loader RSS | OpenResty RSS | BPF map | QPS | CPU% | P99 | notes |
+|--------|------|------------|---------------|---------|-----|------|-----|-------|
+| ≤10 | **Go** | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | 默认 / 当前 main |
+| ≤10 | **Rust** | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | M3 通过后再测 · **勿现在执行** |
+| **30K** | **Go** | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| **30K** | **Rust** | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | **勿现在执行** |
+| **60K** | **Go** | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| **60K** | **Rust** | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | **勿现在执行** |
+
+### C2 复跑章节骨架（Rust 轮次填写）
+
+1. **前置**: Go 轮次 M3-perf / M3-mem 已有结论；Rust loader 可构建、可 attach 同一 BPF 对象（或文档约定差异）。
+2. **固定变量**: 同一内核、同一 OpenResty 配置/证书、同一 `open_ports` 集合、同一压测命令与时长。
+3. **执行**: 仅替换 loader 二进制/启动方式 → 重填表 C1 Rust 行（及必要的表 B sk_lookup 行副本）。
+4. **对比结论槽**:
+   - Go vs Rust @30K: RSS / QPS / CPU / P99 → ☐
+   - Go vs Rust @60K: RSS / QPS / CPU / P99 → ☐
+   - 是否默认切 Rust / 双栈保留: ☐
+5. **非目标（本复测）**: 不借机改 WAF 规则；不重做 P1 TLS 语义（沿用已验路径）。
+
+Checklist 附加：
+
+| # | 项 | 结果 |
+|---|----|------|
+| **M3-impl-go** | Go loader 完成表 A/B 必测档 | ☐ PASS / ☐ FAIL / ☐ SKIP(wait) |
+| **M3-impl-rust** | Rust loader 复测填表 C（** defer — 勿提前跑**） | ☐ SKIP(defer) / ☐ PASS / ☐ FAIL |
+
 ## 明确不在本草稿执行
 
 - ❌ 完整 **30K / 60K** 端口装载与压测
 - ❌ 上线门槛签字
 - ❌ 与生产流量对打
+- ❌ **Rust loader 复测**（等 Go M3 通过后再开；见上表 C）
 
 待 **Repo P1（TLS/产品头策略）** 与 **M3 readiness（批量端口 + 指标）** 后再开 Test 执行轮。
 
