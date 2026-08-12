@@ -4,7 +4,8 @@
 # Do NOT run against stock openresty/1.19.3.2 (will correctly fail / N/A).
 #
 # Usage:
-#   OPENRESTY_PREFIX=/path/to/tengine-or-mod-openresty \
+#   OPENRESTY_PREFIX=/usr/local/openresty-hah \
+#   OPENRESTY_NGINX_CONF=openresty/nginx.tengine-https-allow-http.conf.example \
 #   ./scripts/accept-p1-a-dual.sh
 #
 # Optional: PORT=18081 HOST=127.0.0.1
@@ -13,7 +14,7 @@ cd "$(dirname "$0")/.."
 export CGO_ENABLED=0
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-18081}"
-OPENRESTY_PREFIX="${OPENRESTY_PREFIX:-}"
+OPENRESTY_PREFIX="${OPENRESTY_PREFIX:-/usr/local/openresty-hah}"
 
 if [[ -z "$OPENRESTY_PREFIX" || ! -x "$OPENRESTY_PREFIX/bin/openresty" ]]; then
   if [[ -z "$OPENRESTY_PREFIX" && -x /usr/local/openresty/bin/openresty ]]; then
@@ -70,6 +71,12 @@ if rg -q 'invalid parameter "https_allow_http"' "$PROBE_DIR/t.err"; then
 fi
 
 echo "=== start demo (product listen — no -tls-ports stock split) ==="
+# Prefer product single-listen conf when using https_allow_http build
+export OPENRESTY_NGINX_CONF="${OPENRESTY_NGINX_CONF:-openresty/nginx.tengine-https-allow-http.conf.example}"
+# Ensure loader does not open stock TLS-only steered ports if env supported
+export LOADER_TLS_PORTS="${LOADER_TLS_PORTS:-}"
+unset LOADER_TLS_PORTS 2>/dev/null || true
+
 # Prefer tengine example conf if helper supports it; else document manual switch
 export OPENRESTY_PREFIX="${OPENRESTY_PREFIX:-$(dirname "$(dirname "$OR_BIN")")}"
 # Stock helper uses dual listen; for product gate, set if supported:
