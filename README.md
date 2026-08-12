@@ -43,7 +43,17 @@ Without the BPF program attached, steered-port curls should fail.
 
 ## M1: sk_lookup → OpenResty
 
-HTTP-first wiring. OpenResty binds **only** `127.0.0.1:8080`; the loader registers that listen FD into the sockmap and opens extra ports in BPF.
+**Acceptance source of truth:** [docs/acceptance-m1.md](docs/acceptance-m1.md) (Test / QA). This wiring exists to pass **M1-1 … M1-5**. Design notes: [docs/openresty-m1.md](docs/openresty-m1.md).
+
+HTTP-first. OpenResty binds **only** `127.0.0.1:8080`; the loader registers that listen FD into the sockmap and opens extra ports in BPF. Do **not** use `$server_port` as the business/external port (after `sk_lookup` it is often `8080`). Use **`$waf_external_port`**.
+
+| Must-pass | What to prove | This PR |
+|-----------|---------------|---------|
+| **M1-1** | `ss -lntp` shows only the fixed OpenResty internal listen; steered ports have no userspace bind | Internal `127.0.0.1:8080`; extras `18081,18082,65500` |
+| **M1-2** | External ports hit **OpenResty**, not toy `sk_lookup demo OK` | Body `OpenResty M1 OK`; `Server: openresty/1.19.3.2`; **http://** (TLS = M1-6, not required here) |
+| **M1-3** | `$waf_external_port` = client destination; two ports distinguishable; **not** the internal listen | Header `X-Waf-External-Port` + access_log; `$server_port` may stay `8080` |
+| **M1-4** | Delete one `open_ports` key → that port fails; neighbors still work | `./run-openresty-demo.sh close-port 18081` or `bpftool map delete` |
+| **M1-5** | Run against OpenResty **1.19.3.2** (or same-generation, write the version string) | Image `openresty/openresty:1.19.3.2-bionic` |
 
 ```bash
 export CGO_ENABLED=0
@@ -51,17 +61,14 @@ export CGO_ENABLED=0
 #   docker compose -f openresty/docker-compose.yml up -d
 #   # or: OPENRESTY_PREFIX=/usr/local/openresty
 ./run-openresty-demo.sh start
-./run-openresty-demo.sh verify
-# M1-4: drop one steered port while loader stays up
-./run-openresty-demo.sh close-port 18081
+./run-openresty-demo.sh verify          # M1-1, M1-2, M1-3 (+ prints version for M1-5)
+./run-openresty-demo.sh close-port 18081  # M1-4
 curl -sS --max-time 3 http://127.0.0.1:18081/   # expect fail
 curl -sS http://127.0.0.1:18082/                # still OpenResty
 ./run-openresty-demo.sh stop
 ```
 
-Do **not** use `$server_port` as the business/external port. After `sk_lookup`, it is often the internal listen (`8080`). Use `$waf_external_port` (also echoed as `X-Waf-External-Port`).
-
-Full design, ss/curl checks, and TLS follow-up notes: **[docs/openresty-m1.md](docs/openresty-m1.md)**. Acceptance checklist: **[docs/acceptance-m1.md](docs/acceptance-m1.md)**.
+QA fills the checkboxes in **[docs/acceptance-m1.md](docs/acceptance-m1.md)** after running the PR; do not treat toy HTTP (`make run-toy`) as M1.
 
 ## Idea
 

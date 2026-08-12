@@ -120,7 +120,9 @@ Maps are pinned at `/sys/fs/bpf/waf-sklookup/open_ports` while the loader runs.
 sudo ./waf-sklookup-demo -mode dump-ports
 sudo ./waf-sklookup-demo -mode close-port -ports 18081
 # or: ./run-openresty-demo.sh close-port 18081
-# or bpftool (u16 LE key; 18081 = 0x46A9 → a9 46):
+# or bpftool (matches docs/acceptance-m1.md; u16 LE key; 18081 = 0x46A9 → a9 46):
+#   sudo bpftool map dump name open_ports
+#   sudo bpftool map delete name open_ports key hex a9 46
 #   sudo bpftool map delete pinned /sys/fs/bpf/waf-sklookup/open_ports key hex a9 46
 
 curl -sS --max-time 3 http://127.0.0.1:18081/   # expect fail

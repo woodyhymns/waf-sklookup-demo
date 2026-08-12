@@ -192,10 +192,19 @@ cmd_verify() {
   port="${TARGET##*:}"
   [[ "$host" == "$port" ]] && host="127.0.0.1" && port="8080"
 
-  echo "=== M1-1 bind check (only internal listen expected) ==="
-  if command -v ss >/dev/null 2>&1; then
-    ss -tln | grep -E ':(8080|18081|18082|65500)\b' || true
+  echo "=== M1-5 OpenResty version (if local binary) ==="
+  if find_openresty_bin >/dev/null 2>&1; then
+    "$(find_openresty_bin)" -v 2>&1 || true
   else
+    echo "(docker image openresty/openresty:1.19.3.2-bionic; check Server header below)"
+  fi
+
+  echo
+  echo "=== M1-1 bind check (ss -lntp; only internal listen expected) ==="
+  if command -v ss >/dev/null 2>&1; then
+    ss -lntp | grep -E ':(8080|18081|18082|65500)\b' || true
+  else
+    echo "(ss not installed; /proc/net/tcp LISTEN:)"
     listen_ports_from_proc
   fi
   if listen_ports_from_proc | grep -Eq 'port=(18081|18082|65500)'; then
@@ -212,6 +221,10 @@ cmd_verify() {
   cat "$hdr"
   cat "$body"
   assert_body_openresty "$body"
+  if ! grep -qi "Server: openresty" "$hdr"; then
+    echo "FAIL: internal response Server header is not OpenResty" >&2
+    exit 1
+  fi
   if ! grep -q "waf_external_port=${port}" "$body"; then
     echo "FAIL: internal curl missing waf_external_port=${port}" >&2
     exit 1
@@ -227,6 +240,10 @@ cmd_verify() {
     cat "$hdr"
     cat "$body"
     assert_body_openresty "$body"
+    if ! grep -qi "Server: openresty" "$hdr"; then
+      echo "FAIL: Server header is not OpenResty" >&2
+      exit 1
+    fi
     if ! grep -qi "X-Waf-External-Port: ${p}" "$hdr"; then
       echo "FAIL: header X-Waf-External-Port != $p" >&2
       exit 1
@@ -247,7 +264,8 @@ cmd_verify() {
     tail -8 "$(state_dir)/logs/access.log"
   fi
   echo
-  echo "verify OK (M1-1 bind, M1-2 OpenResty body, M1-3 distinct external ports)"
+  echo "verify OK (M1-1 bind, M1-2 OpenResty body, M1-3 distinct external ports, M1-5 version header)"
+  echo "M1-4: ./run-openresty-demo.sh close-port 18081   # or: sudo bpftool map delete name open_ports key hex a9 46"
 }
 
 cmd_close_port() {

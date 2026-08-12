@@ -2,9 +2,10 @@
 
 - **里程碑**: [可执行里程碑：sk_lookup → OpenResty WAF](https://app.notion.com/p/3ba6e599de1981b292abfec7ccd84417)
 - **分支**: `feat/openresty-integration`
-- **状态**: 清单就绪 · **待 Repo PR 后执行**（截止写清单时：无 open PR；分支与 main 同点）
+- **状态**: 清单就绪 · PR 已开，**待 Test 按本表勾选**（结果栏仍空，不由 Repo 代填）
+- **PR**: https://github.com/woodyhymns/waf-sklookup-demo/pull/1 （`feat/openresty-integration` → `main`）
 - **执行人**: Test（QA）
-- **总体结论**: _未跑_ — 勾选在 PR 落地后填写
+- **总体结论**: _未跑_ — 勾选在 PR 落地后由 Test 填写
 
 ## 环境约束（硬性）
 
@@ -73,6 +74,40 @@ curl -sS -D- http://127.0.0.1:18081/ | rg -i 'waf.external|18081'
 # 日志侧：access_log / Lua 打印应含 external=18081，且不得写成内听端口
 ```
 
+## 本 PR 实现对照（Repo 约定 · 不代替勾选）
+
+下列把清单里的占位符落到本 PR 的具体路径。Test 仍按上面 **M1-1…M1-5** 填 PASS/FAIL。
+
+| 清单项 | 本 PR |
+|--------|--------|
+| 固定内听 | `127.0.0.1:8080`（**不是**玩具口 `:18080`） |
+| 已开通外口 | `18081`, `18082`, `65500` |
+| Scheme | **HTTP** `http://127.0.0.1:<port>/`（清单步骤里的 `https://` 对应扩展项 **M1-6**，本 PR 标 N/A） |
+| `$waf_external_port` | nginx `set` + Lua；响应头 `X-Waf-External-Port`；access_log `waf_external_port=`。**禁止**用 `$server_port`（常为 `8080`） |
+| Map | BPF 名 `open_ports`（u16 LE）；pin `/sys/fs/bpf/waf-sklookup/open_ports` |
+| OpenResty | **1.19.3.2**（`openresty/openresty:1.19.3.2-bionic` 或同代；`openresty -v` / `Server` 头） |
+| 启动 | `./run-openresty-demo.sh start` 然后 `verify` |
+
+```bash
+# M1-1
+ss -lntp | rg -E ':(8080|18081|18082|65500)\b'   # 只应有 127.0.0.1:8080
+
+# M1-2 / M1-3（HTTP；不要用玩具文案 sk_lookup demo OK）
+curl -sS -D- http://127.0.0.1:18081/ | rg -i 'openresty|waf.external|18081'
+curl -sS -D- http://127.0.0.1:18082/ | rg -i 'waf.external|18082'
+
+# M1-4 — CLI 或 bpftool（18081 = 0x46A9 → LE key hex a9 46）
+sudo bpftool map dump name open_ports
+sudo bpftool map dump pinned /sys/fs/bpf/waf-sklookup/open_ports
+sudo bpftool map delete name open_ports key hex a9 46
+# 等价：./run-openresty-demo.sh close-port 18081
+curl -sS --max-time 3 http://127.0.0.1:18081/   # expect fail
+curl -sS http://127.0.0.1:18082/                # still 200
+
+# M1-5
+openresty -v 2>&1   # nginx version: openresty/1.19.3.2
+```
+
 ## 失败与最小修复建议（跑完再填）
 
 | 现象 | 最小建议 |
@@ -93,4 +128,5 @@ curl -sS -D- http://127.0.0.1:18081/ | rg -i 'waf.external|18081'
 - **报告时间 (Asia/Shanghai)**: 
 
 ---
-*清单作者: Test · 对齐 Json M1 开工指令 + Notion 里程碑验收标准 · 未改产品代码*
+*清单作者: Test · 对齐 Json M1 开工指令 + Notion 里程碑验收标准*
+*Repo 仅追加「本 PR 实现对照」与 PR 链接，不代填 PASS/FAIL*
