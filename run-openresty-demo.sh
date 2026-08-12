@@ -11,7 +11,7 @@ export CGO_ENABLED=0
 OPENRESTY_PREFIX="${OPENRESTY_PREFIX:-}"
 LOADER_PORTS="${LOADER_PORTS:-18081,18082,65500}"
 # Stock-compat fallback only (not the Tengine product model). Empty to skip.
-LOADER_TLS_PORTS="${LOADER_TLS_PORTS:-18443}"
+LOADER_TLS_PORTS="${LOADER_TLS_PORTS-18443}"  # empty string skips TLS fallback ports
 TARGET="${TARGET:-127.0.0.1:8080}"
 TLS_TARGET="${TLS_TARGET:-127.0.0.1:8443}"
 WAIT="${WAIT:-60s}"
@@ -57,10 +57,16 @@ ensure_certs() {
 write_local_nginx_conf() {
   local out="$1"
   local logdir="$2"
-  local certdir
+  local certdir src
   certdir="$(pwd)/openresty/certs"
+  src="${OPENRESTY_NGINX_CONF:-openresty/nginx.conf}"
   mkdir -p "$logdir"
-  sed "s|logs/|${logdir}/|g" openresty/nginx.conf > "$out"
+  if [[ ! -f "$src" ]]; then
+    echo "nginx conf not found: $src" >&2
+    exit 1
+  fi
+  echo "Using nginx conf: $src"
+  sed "s|logs/|${logdir}/|g" "$src" > "$out"
   sed -i "s|\$prefix/lua|$(pwd)/openresty/lua|g" "$out"
   sed -i "s|certs/demo.crt|${certdir}/demo.crt|g" "$out"
   sed -i "s|certs/demo.key|${certdir}/demo.key|g" "$out"
@@ -134,12 +140,15 @@ build_loader() {
 start_loader() {
   build_loader
   mkdir -p "$(state_dir)"
+  local tls_args=()
+  if [[ -n "${LOADER_TLS_PORTS}" ]]; then
+    tls_args=(-tls-target "$TLS_TARGET" -tls-ports "$LOADER_TLS_PORTS")
+  fi
   sudo ./waf-sklookup-demo \
     -mode openresty \
     -target "$TARGET" \
     -ports "$LOADER_PORTS" \
-    -tls-target "$TLS_TARGET" \
-    -tls-ports "$LOADER_TLS_PORTS" \
+    "${tls_args[@]}" \
     -wait "$WAIT" \
     -pin-dir "$PIN_DIR" \
     >"$(state_dir)/loader.log" 2>&1 &

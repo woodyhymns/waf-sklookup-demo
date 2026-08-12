@@ -25,15 +25,12 @@ if [[ -z "$OPENRESTY_PREFIX" || ! -x "$OPENRESTY_PREFIX/bin/openresty" ]]; then
   fi
 fi
 
-OR_BIN=""
-if [[ -n "$OPENRESTY_PREFIX" && -x "$OPENRESTY_PREFIX/bin/openresty" ]]; then
-  OR_BIN="$OPENRESTY_PREFIX/bin/openresty"
-elif command -v openresty >/dev/null 2>&1; then
-  OR_BIN="$(command -v openresty)"
-else
-  echo "FAIL: set OPENRESTY_PREFIX to Tengine/魔改 OpenResty with https_allow_http" >&2
+if [[ ! -x "$OPENRESTY_PREFIX/bin/openresty" ]]; then
+  echo "FAIL: OPENRESTY_PREFIX=$OPENRESTY_PREFIX has no bin/openresty (waiting for openresty-hah build?)" >&2
   exit 2
 fi
+OR_BIN="$OPENRESTY_PREFIX/bin/openresty"
+export OPENRESTY_PREFIX
 
 echo "=== engine ==="
 "$OR_BIN" -v 2>&1 || true
@@ -73,9 +70,8 @@ fi
 echo "=== start demo (product listen — no -tls-ports stock split) ==="
 # Prefer product single-listen conf when using https_allow_http build
 export OPENRESTY_NGINX_CONF="${OPENRESTY_NGINX_CONF:-openresty/nginx.tengine-https-allow-http.conf.example}"
-# Ensure loader does not open stock TLS-only steered ports if env supported
-export LOADER_TLS_PORTS="${LOADER_TLS_PORTS:-}"
-unset LOADER_TLS_PORTS 2>/dev/null || true
+# Empty (not unset): skip stock -tls-ports fallback (see run-openresty-demo.sh LOADER_TLS_PORTS-)
+export LOADER_TLS_PORTS=""
 
 # Prefer tengine example conf if helper supports it; else document manual switch
 export OPENRESTY_PREFIX="${OPENRESTY_PREFIX:-$(dirname "$(dirname "$OR_BIN")")}"
