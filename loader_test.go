@@ -27,6 +27,65 @@ func TestParsePortList(t *testing.T) {
 	}
 }
 
+func TestParsePortListAllowEmpty(t *testing.T) {
+	ports, err := parsePortListAllowEmpty("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 0 {
+		t.Fatalf("len=%d want 0", len(ports))
+	}
+	ports, err = parsePortListAllowEmpty("  ,  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 0 {
+		t.Fatalf("whitespace-only len=%d want 0", len(ports))
+	}
+	ports, err = parsePortListAllowEmpty("18443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ports) != 1 || ports[0] != 18443 {
+		t.Fatalf("got %v want [18443]", ports)
+	}
+}
+
+func TestPortSetOverlap(t *testing.T) {
+	got := portSetOverlap([]uint16{18081, 18082}, []uint16{18443, 18081})
+	if len(got) != 1 || got[0] != 18081 {
+		t.Fatalf("got %v want [18081]", got)
+	}
+	if overlap := portSetOverlap([]uint16{18081}, nil); overlap != nil {
+		t.Fatalf("empty b should be nil, got %v", overlap)
+	}
+	if overlap := portSetOverlap([]uint16{1, 2}, []uint16{3, 4}); overlap != nil {
+		t.Fatalf("disjoint should be nil, got %v", overlap)
+	}
+}
+
+func TestMapEditPortListsIgnoresUnsetDefaults(t *testing.T) {
+	httpPorts, tlsPorts, err := mapEditPortLists(false, "18081,18082,65500", true, "18443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(httpPorts) != 0 {
+		t.Fatalf("unset -ports must not use the openresty default list, got %v", httpPorts)
+	}
+	if len(tlsPorts) != 1 || tlsPorts[0] != 18443 {
+		t.Fatalf("tls ports=%v want [18443]", tlsPorts)
+	}
+}
+
+func TestRedirSlots(t *testing.T) {
+	if redirPrimary != 0 {
+		t.Fatalf("product/primary sockmap slot must be 0, got %d", redirPrimary)
+	}
+	if redirTLS != 1 {
+		t.Fatalf("stock TLS fallback sockmap slot must be 1, got %d", redirTLS)
+	}
+}
+
 func TestParseListenInode(t *testing.T) {
 	// 127.0.0.1:8080 LISTEN, inode 4242
 	table := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n" +

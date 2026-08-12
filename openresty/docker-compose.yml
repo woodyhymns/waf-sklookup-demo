@@ -2,6 +2,9 @@ services:
   openresty:
     image: openresty/openresty:1.19.3.2-bionic
     network_mode: host
+    environment:
+      # Default empty: do not send X-Waf-External-Port. Set to "1" for acceptance.
+      WAF_EXPOSE_EXTERNAL_PORT: ${WAF_EXPOSE_EXTERNAL_PORT:-}
     volumes:
       - ./:/etc/openresty/waf-m1:ro
     command:
@@ -12,4 +15,8 @@ services:
         mkdir -p /tmp/waf-m1-logs
         sed 's|logs/|/tmp/waf-m1-logs/|g' /etc/openresty/waf-m1/nginx.conf > /tmp/waf-m1-nginx.conf
         sed -i 's|$$prefix/lua|/etc/openresty/waf-m1/lua|g' /tmp/waf-m1-nginx.conf
+        sed -i 's|certs/demo.crt|/etc/openresty/waf-m1/certs/demo.crt|g' /tmp/waf-m1-nginx.conf
+        sed -i 's|certs/demo.key|/etc/openresty/waf-m1/certs/demo.key|g' /tmp/waf-m1-nginx.conf
+        test -f /etc/openresty/waf-m1/certs/demo.crt
+        test -f /etc/openresty/waf-m1/certs/demo.key
         exec openresty -p /usr/local/openresty/nginx -c /tmp/waf-m1-nginx.conf -g 'daemon off;'

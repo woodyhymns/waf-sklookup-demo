@@ -1,0 +1,41 @@
+=== engine ===
+nginx version: openresty/1.19.3.2
+=== nginx -t tengine example (must PASS on https_allow_http runtime) ===
+(probe nginx -t rc=1 — if cert paths fail that is OK; invalid parameter is not)
+=== start demo (product listen — no -tls-ports stock split) ===
+certs already present: /workspace/waf-sklookup-demo/openresty/certs/demo.crt /workspace/waf-sklookup-demo/openresty/certs/demo.key (FORCE=1 to regenerate)
+Using nginx conf: openresty/nginx.tengine-https-allow-http.conf.example
+nginx: the configuration file /tmp/waf-sklookup-m1/conf/nginx.conf syntax is ok
+nginx: configuration file /tmp/waf-sklookup-m1/conf/nginx.conf test is successful
+OpenResty started (local) nginx version: openresty/1.19.3.2 prefix=/tmp/waf-sklookup-m1/runtime config=/tmp/waf-sklookup-m1/conf/nginx.conf expose=off
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfel.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfel.go
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfeb.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfeb.go
+Loader PID 212710
+Run './run-openresty-demo.sh verify' to check steered HTTP/HTTPS ports.
+Default: X-Waf-External-Port is hidden. Restart with WAF_EXPOSE_EXTERNAL_PORT=1 to expose it.
+=== P1-A same port HTTP ===
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+=== P1-A same port HTTPS ===
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=https
+remote_addr=127.0.0.1
+PASS: default hide header
+P1-A PASS: same port :18081 HTTP + HTTPS both hit engine
+Notify Json: P1-A PASS on this runtime; PR #4 merge gate cleared from Test side.
+
+=== summary ===
+OPENRESTY_PREFIX=/usr/local/openresty-hah
+openresty/1.19.3.2 with https_allow_http (nginx -t accepts listen ... ssl https_allow_http)
+P1-A: http://127.0.0.1:18081/ → OpenResty M1 OK scheme=http waf_external_port=18081
+P1-A: https://127.0.0.1:18081/ → OpenResty M1 OK scheme=https waf_external_port=18081
+default hide X-Waf-External-Port: PASS
+OVERALL: PASS
+NO MERGE — Alex decides

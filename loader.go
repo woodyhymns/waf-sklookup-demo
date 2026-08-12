@@ -28,42 +28,82 @@ const (
 	modeToy       runMode = "toy"
 	modeOpenResty runMode = "openresty"
 	modeClosePort runMode = "close-port"
+	modeOpenPort  runMode = "open-port"
 	modeDumpPorts runMode = "dump-ports"
 )
 
 const defaultPinDir = "/sys/fs/bpf/waf-sklookup"
 
+// Sockmap slots. Product path uses only slot 0 (one internal listen).
+// Slot 1 is the stock OpenResty 1.19.3.2 TLS fallback listen, not the
+// Tengine https_allow_http production model.
+const (
+	redirPrimary uint32 = 0
+	redirTLS     uint32 = 1
+)
+
 func main() {
-	modeFlag := flag.String("mode", string(modeToy), "toy | openresty | close-port | dump-ports")
+	modeFlag := flag.String("mode", string(modeToy), "toy | openresty | close-port | open-port | dump-ports")
 	listen := flag.String("listen", "127.0.0.1:18080", "toy mode: real server listen address")
-	target := flag.String("target", "127.0.0.1:8080", "openresty mode: internal listen whose socket FD is registered into sockmap")
-	extra := flag.String("ports", "18081,18082,65500", "steered ports (comma-separated); close-port deletes these from open_ports")
-	wait := flag.Duration("wait", 60*time.Second, "openresty mode: max time to wait for target listen socket")
-	pinDir := flag.String("pin-dir", defaultPinDir, "bpffs directory for pinned maps (needed for close-port / bpftool)")
+	target := flag.String("target", "127.0.0.1:8080", "openresty mode: primary internal listen registered into sockmap slot 0")
+	extra := flag.String("ports", "18081,18082,65500", "steered ports for the primary listen (comma-separated); close-port/open-port also use this list")
+	tlsTarget := flag.String("tls-target", "127.0.0.1:8443", "STOCK FALLBACK only: second internal TLS listen (sockmap slot 1). Unused with Tengine https_allow_http.")
+	tlsExtra := flag.String("tls-ports", "", "STOCK FALLBACK only: steered ports mapped to -tls-target. Empty = product path (all ports → -target).")
+	wait := flag.Duration("wait", 60*time.Second, "openresty mode: max time to wait for target listen socket(s)")
+	pinDir := flag.String("pin-dir", defaultPinDir, "bpffs directory for pinned maps (needed for close-port / open-port / bpftool)")
 	flag.Parse()
+
+	portsFlagSet := false
+	tlsPortsFlagSet := false
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "ports":
+			portsFlagSet = true
+		case "tls-ports":
+			tlsPortsFlagSet = true
+		default:
+			// Other flags do not affect map-edit port selection.
+		}
+	})
 
 	mode := runMode(strings.ToLower(strings.TrimSpace(*modeFlag)))
 	switch mode {
-	case modeToy, modeOpenResty, modeClosePort, modeDumpPorts:
+	case modeToy, modeOpenResty, modeClosePort, modeOpenPort, modeDumpPorts:
 	default:
-		log.Fatalf("unknown -mode %q (want toy, openresty, close-port, dump-ports)", *modeFlag)
+		log.Fatalf("unknown -mode %q (want toy, openresty, close-port, open-port, dump-ports)", *modeFlag)
 	}
 
-	if mode == modeClosePort || mode == modeDumpPorts {
-		ports, err := parsePortList(*extra)
-		if err != nil && mode == modeClosePort {
-			log.Fatalf("bad -ports: %v", err)
+	if mode == modeClosePort || mode == modeOpenPort || mode == modeDumpPorts {
+		httpPorts, tlsPorts, err := mapEditPortLists(portsFlagSet, *extra, tlsPortsFlagSet, *tlsExtra)
+		if err != nil {
+			log.Fatal(err)
 		}
-		if mode == modeClosePort {
-			if err := closePinnedPorts(*pinDir, ports); err != nil {
+		switch mode {
+		case modeClosePort:
+			if len(httpPorts)+len(tlsPorts) == 0 {
+				log.Fatal("close-port needs -ports and/or -tls-ports")
+			}
+			if err := closePinnedPorts(*pinDir, append(httpPorts, tlsPorts...)); err != nil {
 				log.Fatal(err)
 			}
 			return
+		case modeOpenPort:
+			if len(httpPorts)+len(tlsPorts) == 0 {
+				log.Fatal("open-port needs -ports and/or -tls-ports")
+			}
+			if err := openPinnedPorts(*pinDir, httpPorts, tlsPorts); err != nil {
+				log.Fatal(err)
+			}
+			return
+		case modeDumpPorts:
+			if err := dumpPinnedPorts(*pinDir); err != nil {
+				log.Fatal(err)
+			}
+			return
+		default:
+			var _never runMode = mode
+			log.Fatalf("unhandled map-only mode %q", _never)
 		}
-		if err := dumpPinnedPorts(*pinDir); err != nil {
-			log.Fatal(err)
-		}
-		return
 	}
 
 	objs := dispatchObjects{}
@@ -85,9 +125,16 @@ func main() {
 	defer l.Close()
 	log.Printf("sk_lookup attached to current netns")
 
-	steeredPorts, err := parsePortList(*extra)
+	steeredPorts, err := parsePortListAllowEmpty(*extra)
 	if err != nil {
 		log.Fatalf("bad -ports: %v", err)
+	}
+	tlsPorts, err := parsePortListAllowEmpty(*tlsExtra)
+	if err != nil {
+		log.Fatalf("bad -tls-ports: %v", err)
+	}
+	if overlap := portSetOverlap(steeredPorts, tlsPorts); len(overlap) > 0 {
+		log.Fatalf("port listed in both -ports and -tls-ports: %v", overlap)
 	}
 
 	if err := pinMaps(*pinDir, &objs); err != nil {
@@ -102,11 +149,20 @@ func main() {
 
 	switch mode {
 	case modeToy:
+		if len(steeredPorts) == 0 {
+			log.Fatal("toy mode needs -ports")
+		}
+		if len(tlsPorts) > 0 {
+			log.Fatal("toy mode does not use -tls-ports (HTTP only)")
+		}
 		if err := runToyMode(ctx, objs, *listen, steeredPorts); err != nil {
 			log.Fatal(err)
 		}
 	case modeOpenResty:
-		if err := runOpenRestyMode(ctx, objs, *target, steeredPorts, *wait); err != nil {
+		if len(steeredPorts) == 0 && len(tlsPorts) == 0 {
+			log.Fatal("openresty mode needs -ports and/or -tls-ports")
+		}
+		if err := runOpenRestyMode(ctx, objs, *target, steeredPorts, *tlsTarget, tlsPorts, *wait); err != nil {
 			log.Fatal(err)
 		}
 	default:
@@ -123,10 +179,10 @@ func runToyMode(ctx context.Context, objs dispatchObjects, listenAddr string, st
 	defer ln.Close()
 	defer file.Close()
 
-	if err := registerListenFD(objs, file); err != nil {
+	if err := registerListenFD(objs, file, redirPrimary); err != nil {
 		return err
 	}
-	if err := openSteeredPorts(objs, steeredPorts); err != nil {
+	if err := openSteeredPorts(objs, steeredPorts, uint8(redirPrimary)); err != nil {
 		return err
 	}
 
@@ -157,33 +213,70 @@ func runToyMode(ctx context.Context, objs dispatchObjects, listenAddr string, st
 	return srv.Shutdown(shutdownCtx)
 }
 
-func runOpenRestyMode(ctx context.Context, objs dispatchObjects, targetAddr string, steeredPorts []uint16, wait time.Duration) error {
+func runOpenRestyMode(ctx context.Context, objs dispatchObjects, targetAddr string, steeredPorts []uint16, tlsTargetAddr string, tlsPorts []uint16, wait time.Duration) error {
+	log.Printf("openresty mode: product path is one internal listen (%s); sk_lookup does not classify HTTP vs TLS", targetAddr)
+	if len(tlsPorts) > 0 {
+		log.Printf("STOCK FALLBACK: also registering TLS listen %s for -tls-ports (stock OpenResty 1.19.3.2 has no https_allow_http)", tlsTargetAddr)
+	}
+
+	httpFile, err := waitForListenSocket(ctx, targetAddr, wait)
+	if err != nil {
+		return err
+	}
+	defer httpFile.Close()
+	if err := registerListenFD(objs, httpFile, redirPrimary); err != nil {
+		return err
+	}
+	if err := openSteeredPorts(objs, steeredPorts, uint8(redirPrimary)); err != nil {
+		return err
+	}
+
+	if len(tlsPorts) > 0 {
+		tlsFile, err := waitForListenSocket(ctx, tlsTargetAddr, wait)
+		if err != nil {
+			return fmt.Errorf("stock TLS fallback listen: %w", err)
+		}
+		defer tlsFile.Close()
+		if err := registerListenFD(objs, tlsFile, redirTLS); err != nil {
+			return err
+		}
+		if err := openSteeredPorts(objs, tlsPorts, uint8(redirTLS)); err != nil {
+			return err
+		}
+	}
+
+	printOpenRestyInstructions(targetAddr, steeredPorts, tlsTargetAddr, tlsPorts)
+	<-ctx.Done()
+	log.Printf("shutting down loader (OpenResty keeps running)")
+	return nil
+}
+
+func waitForListenSocket(ctx context.Context, targetAddr string, wait time.Duration) (*os.File, error) {
 	host, portStr, err := net.SplitHostPort(targetAddr)
 	if err != nil {
-		return fmt.Errorf("bad -target %q: %w", targetAddr, err)
+		return nil, fmt.Errorf("bad listen address %q: %w", targetAddr, err)
 	}
 	port64, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
-		return fmt.Errorf("bad -target port %q: %w", portStr, err)
+		return nil, fmt.Errorf("bad listen port %q: %w", portStr, err)
 	}
 	targetPort := uint16(port64)
 	if host == "" {
 		host = "0.0.0.0"
 	}
 
-	log.Printf("openresty mode: waiting for listen socket on %s (timeout %s)", targetAddr, wait)
+	log.Printf("waiting for listen socket on %s (timeout %s)", targetAddr, wait)
 	deadline := time.Now().Add(wait)
-	var file *os.File
 	var lastErr error
 	nextLog := time.Now()
 	for {
-		file, err = findListenSocketFile(host, targetPort)
+		file, err := findListenSocketFile(host, targetPort)
 		if err == nil {
-			break
+			return file, nil
 		}
 		lastErr = err
 		if time.Now().After(deadline) {
-			return fmt.Errorf("target listen %s not found: %w", targetAddr, lastErr)
+			return nil, fmt.Errorf("target listen %s not found: %w", targetAddr, lastErr)
 		}
 		if !nextLog.After(time.Now()) {
 			log.Printf("waiting for %s: %v", targetAddr, err)
@@ -191,23 +284,10 @@ func runOpenRestyMode(ctx context.Context, objs dispatchObjects, targetAddr stri
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	defer file.Close()
-
-	if err := registerListenFD(objs, file); err != nil {
-		return err
-	}
-	if err := openSteeredPorts(objs, steeredPorts); err != nil {
-		return err
-	}
-
-	printOpenRestyInstructions(targetAddr, steeredPorts)
-	<-ctx.Done()
-	log.Printf("shutting down loader (OpenResty keeps running)")
-	return nil
 }
 
 func listenTCP(listenAddr string) (net.Listener, *os.File, error) {
@@ -228,27 +308,39 @@ func listenTCP(listenAddr string) (net.Listener, *os.File, error) {
 	return ln, file, nil
 }
 
-func registerListenFD(objs dispatchObjects, file *os.File) error {
-	var key uint32
-	if err := objs.RedirSocket.Put(key, uint64(file.Fd())); err != nil {
-		return fmt.Errorf("sockmap put: %w", err)
+func registerListenFD(objs dispatchObjects, file *os.File, slot uint32) error {
+	if slot > redirTLS {
+		return fmt.Errorf("sockmap slot %d out of range", slot)
 	}
-	log.Printf("registered listening socket fd=%d in redir_socket sockmap", file.Fd())
+	if err := objs.RedirSocket.Put(slot, uint64(file.Fd())); err != nil {
+		return fmt.Errorf("sockmap put slot %d: %w", slot, err)
+	}
+	log.Printf("registered listening socket fd=%d in redir_socket[%d]", file.Fd(), slot)
 	return nil
 }
 
-func openSteeredPorts(objs dispatchObjects, ports []uint16) error {
+func openSteeredPorts(objs dispatchObjects, ports []uint16, slot uint8) error {
 	for _, port := range ports {
-		one := uint8(1)
-		if err := objs.OpenPorts.Put(port, one); err != nil {
+		if err := objs.OpenPorts.Put(port, slot); err != nil {
 			return fmt.Errorf("open_ports put %d: %w", port, err)
 		}
-		log.Printf("opened steered port %d (no userspace bind on that port)", port)
+		log.Printf("opened steered port %d → redir_socket[%d] (no userspace bind on that port)", port, slot)
 	}
 	return nil
 }
 
 func parsePortList(raw string) ([]uint16, error) {
+	ports, err := parsePortListAllowEmpty(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(ports) == 0 {
+		return nil, errors.New("no ports provided")
+	}
+	return ports, nil
+}
+
+func parsePortListAllowEmpty(raw string) ([]uint16, error) {
 	var ports []uint16
 	for _, p := range strings.Split(raw, ",") {
 		p = strings.TrimSpace(p)
@@ -261,10 +353,46 @@ func parsePortList(raw string) ([]uint16, error) {
 		}
 		ports = append(ports, uint16(port64))
 	}
-	if len(ports) == 0 {
-		return nil, errors.New("no ports provided")
-	}
 	return ports, nil
+}
+
+func portSetOverlap(a, b []uint16) []uint16 {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+	seen := make(map[uint16]struct{}, len(a))
+	for _, p := range a {
+		seen[p] = struct{}{}
+	}
+	var out []uint16
+	dup := make(map[uint16]struct{})
+	for _, p := range b {
+		if _, ok := seen[p]; !ok {
+			continue
+		}
+		if _, already := dup[p]; already {
+			continue
+		}
+		dup[p] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+func mapEditPortLists(portsFlagSet bool, portsRaw string, tlsFlagSet bool, tlsRaw string) (httpPorts, tlsPorts []uint16, err error) {
+	if portsFlagSet {
+		httpPorts, err = parsePortListAllowEmpty(portsRaw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("bad -ports: %w", err)
+		}
+	}
+	if tlsFlagSet {
+		tlsPorts, err = parsePortListAllowEmpty(tlsRaw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("bad -tls-ports: %w", err)
+		}
+	}
+	return httpPorts, tlsPorts, nil
 }
 
 func pinMaps(dir string, objs *dispatchObjects) error {
@@ -298,9 +426,39 @@ func closePinnedPorts(pinDir string, ports []uint16) error {
 	defer m.Close()
 	for _, port := range ports {
 		if err := m.Delete(port); err != nil {
+			if errors.Is(err, ebpf.ErrKeyNotExist) {
+				log.Printf("steered port %d already closed", port)
+				continue
+			}
 			return fmt.Errorf("delete port %d: %w", port, err)
 		}
 		log.Printf("closed steered port %d (removed from open_ports)", port)
+	}
+	return nil
+}
+
+func openPinnedPorts(pinDir string, httpPorts, tlsPorts []uint16) error {
+	m, err := ebpf.LoadPinnedMap(filepath.Join(pinDir, "open_ports"), nil)
+	if err != nil {
+		return fmt.Errorf("load pinned open_ports: %w (is the loader still running?)", err)
+	}
+	defer m.Close()
+	if overlap := portSetOverlap(httpPorts, tlsPorts); len(overlap) > 0 {
+		return fmt.Errorf("port listed in both -ports and -tls-ports: %v", overlap)
+	}
+	for _, port := range httpPorts {
+		slot := uint8(redirPrimary)
+		if err := m.Put(port, slot); err != nil {
+			return fmt.Errorf("open port %d: %w", port, err)
+		}
+		log.Printf("opened steered port %d → redir_socket[%d]", port, slot)
+	}
+	for _, port := range tlsPorts {
+		slot := uint8(redirTLS)
+		if err := m.Put(port, slot); err != nil {
+			return fmt.Errorf("open tls port %d: %w", port, err)
+		}
+		log.Printf("opened steered port %d → redir_socket[%d] (stock TLS fallback)", port, slot)
 	}
 	return nil
 }
@@ -315,7 +473,11 @@ func dumpPinnedPorts(pinDir string) error {
 	var val uint8
 	iter := m.Iterate()
 	for iter.Next(&key, &val) {
-		fmt.Printf("%d\n", key)
+		label := "primary"
+		if val == uint8(redirTLS) {
+			label = "tls-fallback"
+		}
+		fmt.Printf("%d\tredir=%d\t%s\n", key, val, label)
 	}
 	if err := iter.Err(); err != nil {
 		return err
@@ -338,19 +500,29 @@ func printToyInstructions(listenAddr string, steeredPorts []uint16) {
 	fmt.Println("================================")
 }
 
-func printOpenRestyInstructions(targetAddr string, steeredPorts []uint16) {
+func printOpenRestyInstructions(targetAddr string, steeredPorts []uint16, tlsTargetAddr string, tlsPorts []uint16) {
 	host, _, _ := net.SplitHostPort(targetAddr)
 	if host == "" || host == "0.0.0.0" {
 		host = "127.0.0.1"
 	}
-	fmt.Println("======== OPENRESTY M1 READY ========")
-	fmt.Printf("Internal:    curl -sS http://%s/\n", targetAddr)
+	fmt.Println("======== OPENRESTY P1 READY ========")
+	fmt.Println("Product: sk_lookup steers external ports to a fixed internal listen.")
+	fmt.Println("Tengine https_allow_http: that one listen accepts HTTP and TLS.")
+	fmt.Println("Stock 1.19.3.2: no https_allow_http; -tls-ports is a labeled fallback.")
+	fmt.Printf("Internal HTTP: curl -sS http://%s/\n", targetAddr)
 	for _, port := range steeredPorts {
-		fmt.Printf("Steered:     curl -sS http://%s:%d/\n", host, port)
+		fmt.Printf("Steered HTTP:  curl -sS http://%s:%d/\n", host, port)
 	}
-	fmt.Println("Only the internal listen should appear in ss/proc; steered ports have no bind().")
-	fmt.Println("Check X-Waf-External-Port header and access log for $waf_external_port.")
-	fmt.Println("Close a port: sudo ./waf-sklookup-demo -mode close-port -ports 18081")
+	if len(tlsPorts) > 0 {
+		fmt.Printf("Internal TLS (stock fallback): curl -sk https://%s/\n", tlsTargetAddr)
+		for _, port := range tlsPorts {
+			fmt.Printf("Steered TLS (stock fallback):  curl -sk https://%s:%d/\n", host, port)
+		}
+	}
+	fmt.Println("Default responses omit X-Waf-External-Port; access_log still has $waf_external_port.")
+	fmt.Println("Expose header: WAF_EXPOSE_EXTERNAL_PORT=1 (restart OpenResty).")
+	fmt.Println("Close: sudo ./waf-sklookup-demo -mode close-port -ports 18081")
+	fmt.Println("Reopen: sudo ./waf-sklookup-demo -mode open-port -ports 18081")
 	fmt.Println("Ctrl+C to stop the loader (OpenResty keeps running).")
 	fmt.Println("====================================")
 }

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# M1 demo: OpenResty internal listen + sk_lookup loader steers external ports.
+# P1 demo: OpenResty internal listen(s) + sk_lookup loader steers external ports.
+# Product model: all steered ports → one internal listen; Tengine https_allow_http
+# accepts HTTP+TLS on that listen. Stock 1.19.3.2 has no https_allow_http, so this
+# helper also registers a labeled TLS fallback listen (8443 / -tls-ports).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -7,28 +10,39 @@ export CGO_ENABLED=0
 
 OPENRESTY_PREFIX="${OPENRESTY_PREFIX:-}"
 LOADER_PORTS="${LOADER_PORTS:-18081,18082,65500}"
+# Stock-compat fallback only (not the Tengine product model). Empty to skip.
+LOADER_TLS_PORTS="${LOADER_TLS_PORTS-18443}"  # empty string skips TLS fallback ports
 TARGET="${TARGET:-127.0.0.1:8080}"
+TLS_TARGET="${TLS_TARGET:-127.0.0.1:8443}"
 WAIT="${WAIT:-60s}"
 PIN_DIR="${PIN_DIR:-/sys/fs/bpf/waf-sklookup}"
+# Default: do not send X-Waf-External-Port. Set to 1 for acceptance/debug.
+WAF_EXPOSE_EXTERNAL_PORT="${WAF_EXPOSE_EXTERNAL_PORT:-}"
 
 usage() {
   cat <<EOF
-Usage: $0 [start|stop|verify|close-port PORT|dump-ports]
+Usage: $0 [start|stop|verify|close-port PORT|open-port PORT|dump-ports|certs]
 
   start              Build loader, start OpenResty, attach sk_lookup
   stop               Stop loader + OpenResty started by this script
-  verify             Bind check + curl internal/steered ports (M1-1..3)
-  close-port PORT    Remove PORT from open_ports (M1-4); loader must be running
+  verify             Bind check + HTTP; dual-protocol SAME-port case; stock TLS fallback
+  close-port PORT    Remove PORT from open_ports; loader must be running
+  open-port PORT     Re-insert PORT into open_ports (primary slot, or TLS if --tls)
   dump-ports         List steered ports currently in the pinned map
+  certs              Generate demo-only self-signed certs
 
 Environment:
-  OPENRESTY_PREFIX  Local OpenResty prefix (else docker-compose, else PATH)
-  LOADER_PORTS      Steered ports (default: 18081,18082,65500)
-  TARGET            Internal listen (default: 127.0.0.1:8080)
-  WAIT              Loader wait for OpenResty listen (default: 60s)
-  PIN_DIR           Pinned BPF maps (default: /sys/fs/bpf/waf-sklookup)
+  OPENRESTY_PREFIX           Local OpenResty prefix (else docker-compose, else PATH)
+  LOADER_PORTS               Steered HTTP/primary ports (default: 18081,18082,65500)
+  LOADER_TLS_PORTS           STOCK FALLBACK steered TLS ports (default: 18443; empty to skip)
+  TARGET                     Primary internal listen (default: 127.0.0.1:8080)
+  TLS_TARGET                 STOCK FALLBACK TLS listen (default: 127.0.0.1:8443)
+  WAIT                       Loader wait for OpenResty listen (default: 60s)
+  PIN_DIR                    Pinned BPF maps (default: /sys/fs/bpf/waf-sklookup)
+  WAF_EXPOSE_EXTERNAL_PORT   Set to 1 to send X-Waf-External-Port (default: unset/off)
 
-Requires: root/CAP_BPF for loader, Linux sk_lookup, curl, OpenResty 1.19.3.2.
+Requires: root/CAP_BPF for loader, Linux sk_lookup, curl, openssl, OpenResty 1.19.3.2.
+Product Tengine listen: see openresty/nginx.tengine-https-allow-http.conf.example
 EOF
 }
 
@@ -36,12 +50,26 @@ state_dir() {
   echo "${TMPDIR:-/tmp}/waf-sklookup-m1"
 }
 
+ensure_certs() {
+  ./openresty/certs/gen-demo-certs.sh
+}
+
 write_local_nginx_conf() {
   local out="$1"
   local logdir="$2"
+  local certdir src
+  certdir="$(pwd)/openresty/certs"
+  src="${OPENRESTY_NGINX_CONF:-openresty/nginx.conf}"
   mkdir -p "$logdir"
-  sed "s|logs/|${logdir}/|g" openresty/nginx.conf > "$out"
+  if [[ ! -f "$src" ]]; then
+    echo "nginx conf not found: $src" >&2
+    exit 1
+  fi
+  echo "Using nginx conf: $src"
+  sed "s|logs/|${logdir}/|g" "$src" > "$out"
   sed -i "s|\$prefix/lua|$(pwd)/openresty/lua|g" "$out"
+  sed -i "s|certs/demo.crt|${certdir}/demo.crt|g" "$out"
+  sed -i "s|certs/demo.key|${certdir}/demo.key|g" "$out"
 }
 
 find_openresty_bin() {
@@ -67,9 +95,9 @@ start_openresty_local() {
   write_local_nginx_conf "$conf" "$logdir"
   "$or_bin" -t -p "$runtime" -c "$conf"
   "$or_bin" -p "$runtime" -c "$conf" -s stop 2>/dev/null || true
-  "$or_bin" -p "$runtime" -c "$conf"
+  WAF_EXPOSE_EXTERNAL_PORT="$WAF_EXPOSE_EXTERNAL_PORT" "$or_bin" -p "$runtime" -c "$conf"
   echo "$logdir/nginx.pid" > "$(state_dir)/openresty.pidpath"
-  echo "OpenResty started (local) $($or_bin -v 2>&1) prefix=$runtime config=$conf"
+  echo "OpenResty started (local) $($or_bin -v 2>&1) prefix=$runtime config=$conf expose=${WAF_EXPOSE_EXTERNAL_PORT:-off}"
 }
 
 start_openresty_docker() {
@@ -77,11 +105,12 @@ start_openresty_docker() {
     echo "No local OpenResty and docker not found. Install OpenResty 1.19.3.2 or docker." >&2
     exit 1
   fi
-  docker compose -f openresty/docker-compose.yml up -d
-  echo "OpenResty started via docker compose (host network, image openresty/openresty:1.19.3.2-bionic)"
+  WAF_EXPOSE_EXTERNAL_PORT="$WAF_EXPOSE_EXTERNAL_PORT" docker compose -f openresty/docker-compose.yml up -d
+  echo "OpenResty started via docker compose (host network, image openresty/openresty:1.19.3.2-bionic) expose=${WAF_EXPOSE_EXTERNAL_PORT:-off}"
 }
 
 start_openresty() {
+  ensure_certs
   if find_openresty_bin >/dev/null 2>&1; then
     start_openresty_local
   else
@@ -111,17 +140,22 @@ build_loader() {
 start_loader() {
   build_loader
   mkdir -p "$(state_dir)"
+  local tls_args=()
+  if [[ -n "${LOADER_TLS_PORTS}" ]]; then
+    tls_args=(-tls-target "$TLS_TARGET" -tls-ports "$LOADER_TLS_PORTS")
+  fi
   sudo ./waf-sklookup-demo \
     -mode openresty \
     -target "$TARGET" \
     -ports "$LOADER_PORTS" \
+    "${tls_args[@]}" \
     -wait "$WAIT" \
     -pin-dir "$PIN_DIR" \
     >"$(state_dir)/loader.log" 2>&1 &
   echo $! > "$(state_dir)/loader.pid"
   local i
   for i in $(seq 1 40); do
-    if grep -q "OPENRESTY M1 READY" "$(state_dir)/loader.log" 2>/dev/null; then
+    if grep -q "OPENRESTY P1 READY" "$(state_dir)/loader.log" 2>/dev/null; then
       echo "Loader PID $(cat "$(state_dir)/loader.pid")"
       return 0
     fi
@@ -147,7 +181,7 @@ stop_loader() {
 listen_ports_from_proc() {
   python3 - <<'PY'
 from pathlib import Path
-wanted = {8080, 18081, 18082, 65500}
+wanted = {8080, 8443, 18081, 18082, 65500, 18443}
 for line in Path("/proc/net/tcp").read_text().splitlines()[1:]:
     f = line.split()
     if len(f) < 10 or f[3] != "0A":
@@ -172,12 +206,109 @@ assert_body_openresty() {
   fi
 }
 
+assert_header_hidden() {
+  local hdr="$1"
+  if grep -qi "^X-Waf-External-Port:" "$hdr"; then
+    echo "FAIL: X-Waf-External-Port present but WAF_EXPOSE_EXTERNAL_PORT is off" >&2
+    cat "$hdr" >&2
+    return 1
+  fi
+}
+
+assert_header_exposed() {
+  local hdr="$1"
+  local port="$2"
+  if ! grep -qi "^X-Waf-External-Port: ${port}" "$hdr"; then
+    echo "FAIL: expected X-Waf-External-Port: $port (WAF_EXPOSE_EXTERNAL_PORT=1)" >&2
+    cat "$hdr" >&2
+    return 1
+  fi
+}
+
+curl_check() {
+  local url="$1"
+  local expect_port="$2"
+  local hdr="$3"
+  local body="$4"
+  local extra_curl=("${@:5}")
+  curl -sS -D "$hdr" -o "$body" --max-time 5 "${extra_curl[@]}" "$url"
+  cat "$hdr"
+  cat "$body"
+  assert_body_openresty "$body"
+  if ! grep -qi "Server: openresty" "$hdr"; then
+    echo "FAIL: Server header is not OpenResty" >&2
+    exit 1
+  fi
+  if ! grep -q "waf_external_port=${expect_port}" "$body"; then
+    echo "FAIL: body waf_external_port != $expect_port" >&2
+    exit 1
+  fi
+  if [[ "${WAF_EXPOSE_EXTERNAL_PORT}" == "1" || "${WAF_EXPOSE_EXTERNAL_PORT}" == "true" ]]; then
+    assert_header_exposed "$hdr" "$expect_port"
+  else
+    assert_header_hidden "$hdr"
+  fi
+}
+
+# Product case: SAME steered port accepts both http:// and https://.
+# Requires Tengine https_allow_http (or production OpenResty that includes it).
+# Stock 1.19.3.2: HTTPS on the HTTP-steered port is expected to fail — N/A, not FAIL.
+probe_dual_protocol_same_port() {
+  local host="$1"
+  local hdr="$2"
+  local body="$3"
+  local p=""
+  local err
+  for p in ${LOADER_PORTS//,/ }; do
+    p="${p// /}"
+    [[ -n "$p" ]] && break
+  done
+  if [[ -z "$p" ]]; then
+    echo "skip dual-protocol probe (no LOADER_PORTS)"
+    return 0
+  fi
+
+  echo
+  echo "=== P1 dual-protocol SAME steered port :$p (REQUIRES Tengine https_allow_http) ==="
+  echo "Product: sk_lookup steers :$p to ONE internal listen; OpenResty accepts both:"
+  echo "  curl -sS http://${host}:${p}/"
+  echo "  curl -sk https://${host}:${p}/"
+  echo "Stock openresty/1.19.3.2 has no https_allow_http — HTTPS on this same port is N/A here."
+
+  err="$(mktemp)"
+  if curl -sk -D "$hdr" -o "$body" --max-time 3 "https://${host}:${p}/" 2>"$err"; then
+    if grep -q "OpenResty M1 OK" "$body" && grep -q "waf_external_port=${p}" "$body" && grep -q "scheme=https" "$body"; then
+      echo "PASS: same port accepted TLS (https_allow_http available on this engine)"
+      cat "$hdr"
+      cat "$body"
+      if [[ "${WAF_EXPOSE_EXTERNAL_PORT}" == "1" || "${WAF_EXPOSE_EXTERNAL_PORT}" == "true" ]]; then
+        assert_header_exposed "$hdr" "$p"
+      else
+        assert_header_hidden "$hdr"
+      fi
+      rm -f "$err"
+      return 0
+    fi
+  fi
+  echo "N/A on this engine (expected on stock OpenResty 1.19.3.2)."
+  echo "Production/Tengine must PASS: curl -sk https://${host}:${p}/  (same port as HTTP)"
+  if grep -qi "^HTTP/.* 400" "$hdr" 2>/dev/null; then
+    echo "stock evidence: TLS bytes reached the HTTP listen (HTTP 400) — not dual-protocol."
+  fi
+  if [[ -s "$err" ]]; then
+    echo "stock probe stderr (TLS to HTTP listen):"
+    cat "$err"
+  fi
+  rm -f "$err"
+}
+
 cmd_start() {
   mkdir -p "$(state_dir)"
   start_openresty
   sleep 1
   start_loader
-  echo "Run '$0 verify' to check steered ports (M1-1..3)."
+  echo "Run '$0 verify' to check steered HTTP/HTTPS ports."
+  echo "Default: X-Waf-External-Port is hidden. Restart with WAF_EXPOSE_EXTERNAL_PORT=1 to expose it."
 }
 
 cmd_stop() {
@@ -192,92 +323,119 @@ cmd_verify() {
   port="${TARGET##*:}"
   [[ "$host" == "$port" ]] && host="127.0.0.1" && port="8080"
 
-  echo "=== M1-5 OpenResty version (if local binary) ==="
+  echo "=== OpenResty version (if local binary) ==="
   if find_openresty_bin >/dev/null 2>&1; then
     "$(find_openresty_bin)" -v 2>&1 || true
   else
     echo "(docker image openresty/openresty:1.19.3.2-bionic; check Server header below)"
   fi
+  echo "WAF_EXPOSE_EXTERNAL_PORT=${WAF_EXPOSE_EXTERNAL_PORT:-off}"
 
   echo
-  echo "=== M1-1 bind check (ss -lntp; only internal listen expected) ==="
+  echo "=== bind check (ss -lntp; only internal listens expected) ==="
   if command -v ss >/dev/null 2>&1; then
-    ss -lntp | grep -E ':(8080|18081|18082|65500)\b' || true
+    ss -lntp | grep -E ':(8080|8443|18081|18082|65500|18443)\b' || true
   else
     echo "(ss not installed; /proc/net/tcp LISTEN:)"
     listen_ports_from_proc
   fi
-  if listen_ports_from_proc | grep -Eq 'port=(18081|18082|65500)'; then
+  if listen_ports_from_proc | grep -Eq 'port=(18081|18082|65500|18443)'; then
     echo "FAIL: steered port has a userspace LISTEN" >&2
     exit 1
   fi
   echo "PASS: no userspace LISTEN on steered ports"
 
-  echo
-  echo "=== M1-2/M1-3 curl internal $TARGET ==="
   hdr="$(mktemp)"
   body="$(mktemp)"
-  curl -sS -D "$hdr" -o "$body" "http://${host}:${port}/"
-  cat "$hdr"
-  cat "$body"
-  assert_body_openresty "$body"
-  if ! grep -qi "Server: openresty" "$hdr"; then
-    echo "FAIL: internal response Server header is not OpenResty" >&2
-    exit 1
-  fi
-  if ! grep -q "waf_external_port=${port}" "$body"; then
-    echo "FAIL: internal curl missing waf_external_port=${port}" >&2
-    exit 1
-  fi
+
+  echo
+  echo "=== curl internal HTTP $TARGET ==="
+  curl_check "http://${host}:${port}/" "$port" "$hdr" "$body"
 
   local p
   for p in ${LOADER_PORTS//,/ }; do
     p="${p// /}"
     [[ -z "$p" ]] && continue
     echo
-    echo "=== curl steered :$p ==="
-    curl -sS -D "$hdr" -o "$body" --max-time 5 "http://${host}:${p}/"
-    cat "$hdr"
-    cat "$body"
-    assert_body_openresty "$body"
-    if ! grep -qi "Server: openresty" "$hdr"; then
-      echo "FAIL: Server header is not OpenResty" >&2
-      exit 1
-    fi
-    if ! grep -qi "X-Waf-External-Port: ${p}" "$hdr"; then
-      echo "FAIL: header X-Waf-External-Port != $p" >&2
-      exit 1
-    fi
-    if ! grep -q "waf_external_port=${p}" "$body"; then
-      echo "FAIL: body waf_external_port != $p" >&2
-      exit 1
-    fi
+    echo "=== curl steered HTTP :$p ==="
+    curl_check "http://${host}:${p}/" "$p" "$hdr" "$body"
     if grep -q "waf_external_port=8080" "$body" && [[ "$p" != "8080" ]]; then
       echo "FAIL: steered port reported internal listen 8080" >&2
       exit 1
     fi
   done
 
+  probe_dual_protocol_same_port "$host" "$hdr" "$body"
+
+  if [[ -n "${LOADER_TLS_PORTS}" ]]; then
+    local tls_host tls_port
+    tls_host="${TLS_TARGET%%:*}"
+    tls_port="${TLS_TARGET##*:}"
+    [[ "$tls_host" == "$tls_port" ]] && tls_host="127.0.0.1" && tls_port="8443"
+    echo
+    echo "=== curl internal HTTPS $TLS_TARGET (stock fallback, curl -k) ==="
+    echo "NOTE: this second listen exists because stock OpenResty 1.19.3.2 has no https_allow_http."
+    curl_check "https://${tls_host}:${tls_port}/" "$tls_port" "$hdr" "$body" -k
+    for p in ${LOADER_TLS_PORTS//,/ }; do
+      p="${p// /}"
+      [[ -z "$p" ]] && continue
+      echo
+      echo "=== curl steered HTTPS :$p (stock fallback, curl -k) ==="
+      curl_check "https://${host}:${p}/" "$p" "$hdr" "$body" -k
+      if grep -q "waf_external_port=8443" "$body" && [[ "$p" != "8443" ]]; then
+        echo "FAIL: steered TLS port reported internal listen 8443" >&2
+        exit 1
+      fi
+    done
+  fi
+
   if [[ -f "$(state_dir)/logs/access.log" ]]; then
     echo
-    echo "=== access log tail ==="
-    tail -8 "$(state_dir)/logs/access.log"
+    echo "=== access log tail (must include waf_external_port= even when header is hidden) ==="
+    tail -12 "$(state_dir)/logs/access.log"
   fi
   echo
-  echo "verify OK (M1-1 bind, M1-2 OpenResty body, M1-3 distinct external ports, M1-5 version header)"
-  echo "M1-4: ./run-openresty-demo.sh close-port 18081   # or: sudo bpftool map delete name open_ports key hex a9 46"
+  echo "verify OK"
+  echo "  HTTP steered ports hit OpenResty; body/log have \$waf_external_port"
+  echo "  Dual-protocol SAME port (http+https on :18081): REQUIRES Tengine https_allow_http"
+  echo "  X-Waf-External-Port default hidden (set WAF_EXPOSE_EXTERNAL_PORT=1 and restart to expose)"
+  echo "  Stock TLS fallback (NOT product): curl -k https://127.0.0.1:18443/ → 127.0.0.1:8443 ssl"
+  echo "close-port: $0 close-port 18081"
+  echo "open-port:  $0 open-port 18081"
 }
 
 cmd_close_port() {
   local p="${1:-}"
+  local kind="${2:-}"
   if [[ -z "$p" ]]; then
-    echo "usage: $0 close-port PORT" >&2
+    echo "usage: $0 close-port PORT [--tls]" >&2
     exit 1
   fi
   if [[ ! -x ./waf-sklookup-demo ]]; then
     build_loader
   fi
-  sudo ./waf-sklookup-demo -mode close-port -ports "$p" -pin-dir "$PIN_DIR"
+  if [[ "$kind" == "--tls" || "$kind" == "tls" ]]; then
+    sudo ./waf-sklookup-demo -mode close-port -tls-ports "$p" -pin-dir "$PIN_DIR"
+  else
+    sudo ./waf-sklookup-demo -mode close-port -ports "$p" -pin-dir "$PIN_DIR"
+  fi
+}
+
+cmd_open_port() {
+  local p="${1:-}"
+  local kind="${2:-}"
+  if [[ -z "$p" ]]; then
+    echo "usage: $0 open-port PORT [--tls]" >&2
+    exit 1
+  fi
+  if [[ ! -x ./waf-sklookup-demo ]]; then
+    build_loader
+  fi
+  if [[ "$kind" == "--tls" || "$kind" == "tls" ]]; then
+    sudo ./waf-sklookup-demo -mode open-port -tls-ports "$p" -pin-dir "$PIN_DIR"
+  else
+    sudo ./waf-sklookup-demo -mode open-port -ports "$p" -pin-dir "$PIN_DIR"
+  fi
 }
 
 cmd_dump_ports() {
@@ -291,8 +449,10 @@ case "${1:-start}" in
   start) cmd_start ;;
   stop) cmd_stop ;;
   verify) cmd_verify ;;
-  close-port) cmd_close_port "${2:-}" ;;
+  close-port) cmd_close_port "${2:-}" "${3:-}" ;;
+  open-port) cmd_open_port "${2:-}" "${3:-}" ;;
   dump-ports) cmd_dump_ports ;;
+  certs) ensure_certs ;;
   -h|--help|help) usage ;;
   *) echo "Unknown command: $1" >&2; usage; exit 1 ;;
 esac
