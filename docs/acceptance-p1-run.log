@@ -162,7 +162,8 @@ Linux cursor 6.12.94+ #1 SMP PREEMPT_DYNAMIC Tue Jul 28 22:00:48 UTC 2026 x86_64
 --- try curl again with verbose ---
   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
-  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying 127.0.0.1:18081...
+
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying 127.0.0.1:18081...
 * Connected to 127.0.0.1 (127.0.0.1) port 18081
 * using HTTP/1.x
 > GET / HTTP/1.1
@@ -179,7 +180,8 @@ Linux cursor 6.12.94+ #1 SMP PREEMPT_DYNAMIC Tue Jul 28 22:00:48 UTC 2026 x86_64
 < Connection: keep-alive
 < 
 { [125 bytes data]
-100    91    0    91    0     0  74164      0 --:--:-- --:--:-- --:--:-- 91000
+
+100    91    0    91    0     0  74164      0 --:--:-- --:--:-- --:--:-- 91000
 * Connection #0 to host 127.0.0.1 left intact
 OpenResty M1 OK
 waf_external_port=18081
@@ -441,3 +443,257 @@ RESULT P1-A: BLOCKED/N/A on stock 1.19.3.2 (https_allow_http unavailable; nginx 
 
 === close-port negative (HTTP 18081) ===
 FATAL: loader died mid-run
+
+=== QA CORROBORATION APPEND (setsid runner) 2026-08-12T23:47:40Z UTC / 2026-08-13 07:47 CST ===
+Product code tip under test: 30da0c6380f6269987a642da5f457dbe4a918a03
+Branch HEAD at append time: ref: refs/heads/feat/product-p1-tls-and-headers
+git rev-parse HEAD: 49999fc67131faddc54fa3b97cc7073b18b1797a
+docs/acceptance-p1-tls.md: ABSENT on this branch (lives on harness PR #3); items mapped into acceptance-p1.md
+
+=== SETSID ACCEPTANCE RUN 2026-08-12T23:47:40Z ===
+Tip: 2476c2684de6f841c61cfc06c36a0bd8f41ec7a5
+stack ready (i=1) demo=162624
+
+=== verify ===
+=== OpenResty version (if local binary) ===
+nginx version: openresty/1.19.3.2
+WAF_EXPOSE_EXTERNAL_PORT=off
+
+=== bind check (ss -lntp; only internal listens expected) ===
+LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=162384,fd=8),("openresty",pid=162383,fd=8))                               
+LISTEN 0      511        127.0.0.1:8443       0.0.0.0:*    users:(("openresty",pid=162384,fd=9),("openresty",pid=162383,fd=9))                               
+PASS: no userspace LISTEN on steered ports
+
+=== curl internal HTTP 127.0.0.1:8080 ===
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:47:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+OpenResty M1 OK
+waf_external_port=8080
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+
+=== curl steered HTTP :18081 ===
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:47:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+
+=== curl steered HTTP :18082 ===
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:47:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+OpenResty M1 OK
+waf_external_port=18082
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+
+=== curl steered HTTP :65500 ===
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:47:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+OpenResty M1 OK
+waf_external_port=65500
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+
+=== P1 dual-protocol SAME steered port :18081 (REQUIRES Tengine https_allow_http) ===
+Product: sk_lookup steers :18081 to ONE internal listen; OpenResty accepts both:
+  curl -sS http://127.0.0.1:18081/
+  curl -sk https://127.0.0.1:18081/
+Stock openresty/1.19.3.2 has no https_allow_http — HTTPS on this same port is N/A here.
+N/A on this engine (expected on stock OpenResty 1.19.3.2).
+Production/Tengine must PASS: curl -sk https://127.0.0.1:18081/  (same port as HTTP)
+
+=== curl internal HTTPS 127.0.0.1:8443 (stock fallback, curl -k) ===
+NOTE: this second listen exists because stock OpenResty 1.19.3.2 has no https_allow_http.
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:47:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+OpenResty M1 OK
+waf_external_port=8443
+server_port=8443
+scheme=https
+remote_addr=127.0.0.1
+
+=== curl steered HTTPS :18443 (stock fallback, curl -k) ===
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:47:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+OpenResty M1 OK
+waf_external_port=18443
+server_port=8443
+scheme=https
+remote_addr=127.0.0.1
+
+=== access log tail (must include waf_external_port= even when header is hidden) ===
+127.0.0.1:47358 GET / HTTP/1.1 scheme=https internal_port=8443 waf_external_port=18443 status=200
+127.0.0.1:46076 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:57268 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:32980 GET / HTTP/1.1 scheme=https internal_port=8443 waf_external_port=18443 status=200
+127.0.0.1:57278 \x16\x03\x01\x06 scheme=http internal_port=8080 waf_external_port= status=400
+127.0.0.1:42622 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=8080 status=200
+127.0.0.1:43848 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:44560 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18082 status=200
+127.0.0.1:46738 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=65500 status=200
+127.0.0.1:43864 \x16\x03\x01\x06 scheme=http internal_port=8080 waf_external_port= status=400
+127.0.0.1:45368 GET / HTTP/1.1 scheme=https internal_port=8443 waf_external_port=8443 status=200
+127.0.0.1:43388 GET / HTTP/1.1 scheme=https internal_port=8443 waf_external_port=18443 status=200
+
+verify OK
+  HTTP steered ports hit OpenResty; body/log have $waf_external_port
+  Dual-protocol SAME port (http+https on :18081): REQUIRES Tengine https_allow_http
+  X-Waf-External-Port default hidden (set WAF_EXPOSE_EXTERNAL_PORT=1 and restart to expose)
+  Stock TLS fallback (NOT product): curl -k https://127.0.0.1:18443/ → 127.0.0.1:8443 ssl
+close-port: ./run-openresty-demo.sh close-port 18081
+open-port:  ./run-openresty-demo.sh open-port 18081
+verify_exit=0
+
+=== P1-2 headers default ===
+HEADERS:
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:47:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+BODY:
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+RESULT P1-2: PASS
+
+=== P1-B TLS 18443 ===
+HEADERS:
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:47:44 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+BODY:
+OpenResty M1 OK
+waf_external_port=18443
+server_port=8443
+scheme=https
+remote_addr=127.0.0.1
+RESULT P1-B: PASS
+
+=== P1-A dual HTTPS same port (expect fail) ===
+dual_rc=0
+RESULT P1-A: N/A/BLOCKED on stock 1.19.3.2
+
+=== close-port 18081 ===
+2026/08/12 23:47:44 closed steered port 18081 (removed from open_ports)
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+close_rc=0
+RESULT close-port-18081: PASS
+2026/08/12 23:47:45 opened steered port 18081 → redir_socket[0]
+RESULT open-port-18081: PASS
+
+=== close-port 18443 --tls ===
+2026/08/12 23:47:45 closed steered port 18443 (removed from open_ports)
+RESULT close-port-18443: PASS
+2026/08/12 23:47:45 opened steered port 18443 → redir_socket[1] (stock TLS fallback)
+OpenResty M1 OK waf_external_port=18443 server_port=8443 scheme=https remote_addr=127.0.0.1 
+
+=== P1-3 access_log sample ===
+FILE /tmp/waf-sklookup-m1/logs/access.log
+127.0.0.1:44560 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18082 status=200
+127.0.0.1:46738 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=65500 status=200
+127.0.0.1:43864 \x16\x03\x01\x06 scheme=http internal_port=8080 waf_external_port= status=400
+127.0.0.1:45368 GET / HTTP/1.1 scheme=https internal_port=8443 waf_external_port=8443 status=200
+127.0.0.1:43388 GET / HTTP/1.1 scheme=https internal_port=8443 waf_external_port=18443 status=200
+127.0.0.1:43878 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:43402 GET / HTTP/1.1 scheme=https internal_port=8443 waf_external_port=18443 status=200
+127.0.0.1:43880 \x16\x03\x01\x06 scheme=http internal_port=8080 waf_external_port= status=400
+127.0.0.1:36086 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:45758 GET / HTTP/1.1 scheme=https internal_port=8443 waf_external_port=18443 status=200
+RESULT P1-3: PASS
+
+=== P1-1 ss bind ===
+LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=162384,fd=8),("openresty",pid=162383,fd=8))                               
+LISTEN 0      511        127.0.0.1:8443       0.0.0.0:*    users:(("openresty",pid=162384,fd=9),("openresty",pid=162383,fd=9))                               
+RESULT P1-1: PASS
+
+=== P1-4: restart with WAF_EXPOSE_EXTERNAL_PORT=1 ===
+stack ready (i=1) demo=163167
+HEADERS:
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Wed, 12 Aug 2026 23:47:49 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+X-Waf-External-Port: 18081
+X-Waf-Internal-Port: 8080
+
+BODY:
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+RESULT P1-4: PASS
+
+=== P1-5 version ===
+nginx version: openresty/1.19.3.2
+RESULT P1-5: PASS (openresty/1.19.3.2)
+
+=== CLEANUP ===
+Stopped.
+=== ACCEPTANCE SCRIPT DONE ===
+
+
+=== FINAL VERDICT SUMMARY ===
+Engine: openresty/1.19.3.2 stock
+Overall stock fallback: PASS
+Overall product dual-protocol (same port HTTP+HTTPS): BLOCKED/N/A (needs Tengine https_allow_http)
+P1-A: N/A/BLOCKED (stock; nginx -t invalid parameter https_allow_http; HTTPS on :18081 fails / TLS bytes → HTTP 400)
+P1-B: PASS (curl -sk https://127.0.0.1:18443/ → server_port=8443 scheme=https waf_external_port=18443)
+P1-1: PASS (ss only 8080+8443)
+P1-2: PASS (no X-Waf-External-Port by default)
+P1-3: PASS (access_log waf_external_port=)
+P1-4: PASS (WAF_EXPOSE_EXTERNAL_PORT=1 → X-Waf-External-Port: 18081)
+P1-5: PASS (openresty/1.19.3.2)
+close-port 18081 / 18443 --tls: PASS (negative then reopen)
+Cleanup: demo stopped; no merge/push by Test
+Doc clarity https_allow_http: YES — same external port HTTP+HTTPS via listen flag; stock dual-listen/-tls-ports is labeled fallback NOT product model
+Quote (docs/openresty-p1.md): "Production OpenResty incorporates Tengine’s https_allow_http: each nginx listen can accept both cleartext HTTP and HTTPS."
+Quote (docs/openresty-p1.md): "The dual-listen / -tls-ports path is a labeled stock-compat fallback, not the product model."
+Minimal Tengine gaps: need Tengine 3.1.0+ (or prod OpenResty with https_allow_http); single listen 8080 ssl https_allow_http; loader -ports only (no -tls-ports); re-run P1-A via scripts/accept-p1-a-dual.sh

@@ -41,3 +41,5 @@ listen 127.0.0.1:8080 ssl https_allow_http;
 ```
 
 详见 [docs/openresty-p1.md](openresty-p1.md)。证据：`docs/acceptance-p1-run.log`。
+
+注：`docs/acceptance-p1-tls.md` **absent** on this branch (harness PR #3); dual-protocol items mapped here.
