@@ -258,8 +258,7 @@ pub fn print_long_running_usage() {
     eprint!(
         "Usage: {bin} [flags]                    # long-running toy / openresty\n\
          {pad} {bin} <add|remove|list|bulk> ... # M2 control plane (pinned maps)\n\n\
-         Experimental Rust userspace loader. Hot path is still C BPF (dispatch.bpf.c).\n\
-         Go ./waf-sklookup-demo remains the default and rollback.\n\n\
+         Rust userspace loader. Hot path is still C BPF (dispatch.bpf.c).\n\n\
            -mode string\n        toy | openresty | close-port | open-port | dump-ports (default \"toy\")\n\
            -listen string\n        toy mode: real server listen address (default \"127.0.0.1:18080\")\n\
            -target string\n        openresty mode: primary internal listen (default \"127.0.0.1:8080\")\n\

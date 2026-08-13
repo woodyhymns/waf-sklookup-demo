@@ -40,7 +40,7 @@ On a Tengine 3.1.0+ (or production OpenResty that includes this listen option):
 
 ```bash
 # Config: listen 127.0.0.1:8080 ssl https_allow_http;  (example file)
-# Loader: sudo ./waf-sklookup-demo -mode openresty -target 127.0.0.1:8080 -ports 18081,18082,65500
+# Loader: sudo ./rust/loader/target/release/waf-sklookup-loader -mode openresty -target 127.0.0.1:8080 -ports 18081,18082,65500
 #         (no -tls-ports)
 
 ss -lntp | grep -E ':(8080|18081)\b'   # only 127.0.0.1:8080
@@ -102,7 +102,7 @@ docker compose -f openresty/docker-compose.yml up -d   # after make certs
 Manual loader (stock fallback TLS port enabled):
 
 ```bash
-sudo ./waf-sklookup-demo -mode openresty \
+sudo ./rust/loader/target/release/waf-sklookup-loader -mode openresty \
   -target 127.0.0.1:8080 -ports 18081,18082,65500 \
   -tls-target 127.0.0.1:8443 -tls-ports 18443
 ```
@@ -110,7 +110,7 @@ sudo ./waf-sklookup-demo -mode openresty \
 Product-shaped loader (Tengine, or HTTP-only on stock):
 
 ```bash
-sudo ./waf-sklookup-demo -mode openresty \
+sudo ./rust/loader/target/release/waf-sklookup-loader -mode openresty \
   -target 127.0.0.1:8080 -ports 18081,18082,65500
 # no -tls-ports
 ```
@@ -184,7 +184,7 @@ Toy mode is unchanged (`-mode toy`). It rejects `-tls-ports`.
 - No userspace bind on external ports
 - Demo certs: `make certs` → `openresty/certs/demo.{crt,key}` (keys gitignored, labeled demo-only)
 - Compatible with stock OpenResty **1.19.3.2** config + standard Lua only (no private nginx modules). `https_allow_http` is Tengine-only and lives in the example file, not the live conf.
-- **Go loader is the reference implementation** (`loader.go`). P1/M3 continue here. A Rust rewrite is later, only after perf is OK + re-test — not this PR.
+- **Rust is the userspace loader.** The C BPF dataplane and P1 protocol model are unchanged.
 
 ## Out of scope
 

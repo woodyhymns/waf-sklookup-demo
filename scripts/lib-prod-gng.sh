@@ -3,8 +3,6 @@
 # Source from repo root scripts:  # shellcheck source=lib-prod-gng.sh
 #   source "$(dirname "$0")/lib-prod-gng.sh"
 
-export CGO_ENABLED=0
-
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -15,7 +13,7 @@ LOADER_TLS_PORTS="${LOADER_TLS_PORTS-}"
 LOADER_PORTS="${LOADER_PORTS:-18081,18082,65500}"
 TARGET="${TARGET:-127.0.0.1:8080}"
 PIN_DIR="${PIN_DIR:-/sys/fs/bpf/waf-sklookup}"
-LOADER_BIN="${LOADER_BIN:-./waf-sklookup-demo}"
+LOADER_BIN="${LOADER_BIN:-./rust/loader/target/release/waf-sklookup-loader}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-18081}"
 DURATION="${DURATION:-8s}"
@@ -38,9 +36,9 @@ ensure_httpbench() {
 
 ensure_loader_bin() {
   if [[ ! -x "$LOADER_BIN" ]]; then
-    go generate ./...
-    go build -o waf-sklookup-demo .
-    LOADER_BIN="./waf-sklookup-demo"
+    if [[ "$(basename "$LOADER_BIN")" == "waf-sklookup-loader" ]]; then
+      cargo build --release --manifest-path rust/loader/Cargo.toml
+    fi
   fi
   if [[ ! -x "$LOADER_BIN" ]]; then
     echo "LOADER_BIN not executable: $LOADER_BIN" >&2
@@ -74,11 +72,8 @@ hygiene_cleanup() {
   # Close every possible test/fill range while the pinned map is still usable.
   # The demo's default ports are included intentionally: final cleanup is a
   # machine-hygiene boundary, not a request to preserve a running demo.
-  if [[ -x "${LOADER_BIN:-./waf-sklookup-demo}" ]]; then
-    sudo "${LOADER_BIN:-./waf-sklookup-demo}" bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
-  fi
-  if [[ -x ./waf-sklookup-demo && "${LOADER_BIN:-./waf-sklookup-demo}" != "./waf-sklookup-demo" ]]; then
-    sudo ./waf-sklookup-demo bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
+  if [[ -x "${LOADER_BIN:-./rust/loader/target/release/waf-sklookup-loader}" ]]; then
+    sudo "${LOADER_BIN:-./rust/loader/target/release/waf-sklookup-loader}" bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
   fi
 
   demo_stop || true

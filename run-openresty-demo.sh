@@ -7,8 +7,6 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-export CGO_ENABLED=0
-
 OPENRESTY_PREFIX="${OPENRESTY_PREFIX:-}"
 LOADER_PORTS="${LOADER_PORTS:-18081,18082,65500}"
 # Stock-compat fallback only (not the Tengine product model). Empty to skip.
@@ -19,8 +17,7 @@ WAIT="${WAIT:-60s}"
 PIN_DIR="${PIN_DIR:-/sys/fs/bpf/waf-sklookup}"
 # Default: do not send X-Waf-External-Port. Set to 1 for acceptance/debug.
 WAF_EXPOSE_EXTERNAL_PORT="${WAF_EXPOSE_EXTERNAL_PORT:-}"
-# Go remains the default + rollback. Rust: LOADER_BIN=./rust/loader/target/release/waf-sklookup-loader
-LOADER_BIN="${LOADER_BIN:-./waf-sklookup-demo}"
+LOADER_BIN="${LOADER_BIN:-./rust/loader/target/release/waf-sklookup-loader}"
 
 usage() {
   cat <<EOF
@@ -51,8 +48,8 @@ Environment:
   WAIT                       Loader wait for OpenResty listen (default: 60s)
   PIN_DIR                    Pinned BPF maps (default: /sys/fs/bpf/waf-sklookup)
   WAF_EXPOSE_EXTERNAL_PORT   Set to 1 to send X-Waf-External-Port (default: unset/off)
-  LOADER_BIN                 Userspace loader (default: ./waf-sklookup-demo). Rust:
-                             ./rust/loader/target/release/waf-sklookup-loader
+  LOADER_BIN                 Userspace loader (default:
+                             ./rust/loader/target/release/waf-sklookup-loader)
 
 Requires: root/CAP_BPF for loader, Linux sk_lookup, curl, openssl, OpenResty 1.19.3.2.
 Product Tengine listen: see openresty/nginx.tengine-https-allow-http.conf.example
@@ -146,15 +143,8 @@ stop_openresty() {
   sudo pkill -x openresty 2>/dev/null || true
 }
 
-is_go_loader() {
-  [[ "$(basename "$LOADER_BIN")" == "waf-sklookup-demo" ]]
-}
-
 build_loader() {
-  if is_go_loader; then
-    go generate ./...
-    go build -o waf-sklookup-demo .
-  else
+  if [[ "$(basename "$LOADER_BIN")" == "waf-sklookup-loader" ]]; then
     cargo build --release --manifest-path rust/loader/Cargo.toml
   fi
 }
@@ -353,9 +343,6 @@ cmd_stop() {
   : > "$(state_dir)/stop-in-progress"
   if [[ -x "$LOADER_BIN" ]]; then
     sudo "$LOADER_BIN" bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
-  fi
-  if [[ -x ./waf-sklookup-demo && "$LOADER_BIN" != "./waf-sklookup-demo" ]]; then
-    sudo ./waf-sklookup-demo bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
   fi
   stop_loader
   stop_openresty
