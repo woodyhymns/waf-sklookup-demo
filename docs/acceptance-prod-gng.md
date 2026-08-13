@@ -1,7 +1,7 @@
 # Production Go/No-Go 验收包（Acceptance）
 
 - **分支**: `test/prod-gng-acceptance`（基于 `main@09d138b`）
-- **Tip SHA**: `(see git HEAD; gates commit updates)`
+- **Tip SHA**: `0e3bafe` (Written gates table content from `741db63`)
 - **Scope**: HAH OpenResty `/usr/local/openresty-hah`（1.19.3.2 + `https_allow_http`）+ **Go loader**；Rust **DEFER**
 - **产品路径**: 同口 HTTP+HTTPS；`LOADER_TLS_PORTS=""`；conf `openresty/nginx.tengine-https-allow-http.conf.example`
 - **前置**: M3 30K/60K 内存阶梯已 PASS（见 [acceptance-m3-full-run.md](acceptance-m3-full-run.md)）
