@@ -30,8 +30,9 @@ Usage: $0 [start|stop|verify|add PORT|remove PORT|list|load-ports ...|bulk ...|f
   add PORT [...]     M2: insert port(s) or START-END into pinned open_ports (no reload)
   remove PORT [...]  M2: delete port(s) from pinned open_ports (no reload)
   list               M2: list steered ports currently in the pinned map
-  load-ports         M2/M3: bulk add via -range / -file / -stdin (no OpenResty reload)
-  bulk add|remove|fill
+  load-ports         M2/M3: bulk open via -range / -file / -stdin (no OpenResty reload)
+  close-ports        M2/M3: bulk close via -range / -file / -stdin
+  bulk open|close|fill
                      M2: range/file/stdin or M3 seed (30K/60K); see docs/openresty-m2.md
   fill COUNT [START] M3 helper: bulk fill COUNT ports from START (default 5000; 60K must fit in uint16)
   close-port PORT    Legacy alias for remove (optional --tls)
@@ -410,7 +411,8 @@ cmd_verify() {
   echo "  Stock TLS fallback (NOT product): curl -k https://127.0.0.1:18443/ → 127.0.0.1:8443 ssl"
   echo "close-port: $0 remove 18081   # or: $0 close-port 18081"
   echo "open-port:  $0 add 18081"
-  echo "M2 bulk:    $0 load-ports -range 20000-20010"
+  echo "M2 bulk:    $0 bulk open -range 20000-20010"
+  echo "M2 close:   $0 bulk close -range 20000-20010"
   echo "M3 fill:    $0 fill 30000     # or ./scripts/m3-fill-ports.sh 30000"
 }
 
@@ -497,7 +499,8 @@ case "${1:-start}" in
   add) shift; cmd_add "$@" ;;
   remove) shift; cmd_remove "$@" ;;
   list) shift; cmd_list "$@" ;;
-  load-ports) shift; cmd_bulk add "$@" ;;
+  load-ports) shift; cmd_bulk open "$@" ;;
+  close-ports) shift; cmd_bulk close "$@" ;;
   bulk) shift; cmd_bulk "$@" ;;
   fill) shift; cmd_fill "$@" ;;
   close-port) cmd_close_port "${2:-}" "${3:-}" ;;

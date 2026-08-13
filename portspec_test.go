@@ -210,7 +210,7 @@ func TestOpenPortsMaxEntries(t *testing.T) {
 }
 
 func TestIsCtlCommand(t *testing.T) {
-	for _, c := range []string{"add", "remove", "list", "bulk", "load-ports", "open", "close", "dump", "help"} {
+	for _, c := range []string{"add", "remove", "list", "bulk", "load-ports", "close-ports", "open", "close", "dump", "help"} {
 		if !isCtlCommand(c) {
 			t.Fatalf("%q should be a ctl command", c)
 		}

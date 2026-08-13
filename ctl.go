@@ -11,24 +11,22 @@ import (
 
 const ctlUsage = `M2 control plane (pinned open_ports; no OpenResty reload):
 
-  sudo ./waf-sklookup-demo add PORT[,PORT|START-END...] [-tls] [-pin-dir DIR]
-  sudo ./waf-sklookup-demo remove PORT[,PORT|START-END...] [-pin-dir DIR]
-  sudo ./waf-sklookup-demo list [-count] [-pin-dir DIR]
-  sudo ./waf-sklookup-demo load-ports -range START-END [-tls] [-pin-dir DIR]
-  sudo ./waf-sklookup-demo load-ports -file ports.txt
-  sudo ./waf-sklookup-demo load-ports -stdin < ports.txt
-  sudo ./waf-sklookup-demo bulk add -range START-END     # same as load-ports
-  sudo ./waf-sklookup-demo bulk fill -count 30000 [-start 5000]   # M3 30K/60K seed
-
-Aliases: open=add, close=remove, dump=list, load-ports=bulk add.
-Legacy flags still work: -mode open-port|close-port|dump-ports.
+  sudo ./waf-sklookup-demo add|open PORT|START-END [-range A-B] [-file F] [-stdin]
+  sudo ./waf-sklookup-demo remove|close PORT|START-END [-range A-B] [-file F] [-stdin]
+  sudo ./waf-sklookup-demo list [-count]
+  sudo ./waf-sklookup-demo load-ports -range START-END | -file ports.txt | -stdin
+  sudo ./waf-sklookup-demo close-ports -range START-END | -file ports.txt | -stdin
+  sudo ./waf-sklookup-demo bulk open  -range START-END    # 30K/60K open
+  sudo ./waf-sklookup-demo bulk close -range START-END    # 30K/60K close
+  sudo ./waf-sklookup-demo bulk fill -count 30000 [-start 5000]
 
 M3 Test: ./scripts/m3-fill-ports.sh 30000   (or 60000). No OpenResty reload.
+Go is the reference loader; Rust rewrite only after M3/perf is OK.
 `
 
 func isCtlCommand(s string) bool {
 	switch s {
-	case "add", "open", "remove", "close", "list", "dump", "bulk", "load-ports", "help":
+	case "add", "open", "remove", "close", "list", "dump", "bulk", "load-ports", "close-ports", "help":
 		return true
 	default:
 		return false
@@ -48,6 +46,8 @@ func runCtl(args []string) error {
 		return ctlList(args[1:])
 	case "load-ports":
 		return ctlBulkAdd(args[1:])
+	case "close-ports":
+		return ctlBulkRemove(args[1:])
 	case "bulk":
 		return ctlBulk(args[1:])
 	case "help":
@@ -72,33 +72,42 @@ func ctlSlot(tls bool) uint8 {
 	return uint8(redirPrimary)
 }
 
+func addBulkSourceFlags(fs *flag.FlagSet) (rangeSpec, filePath *string, fromStdin *bool) {
+	rangeSpec = fs.String("range", "", "inclusive port range START-END (e.g. 5000-34999)")
+	filePath = fs.String("file", "", "file of ports / ranges (one token or comma-list per line)")
+	fromStdin = fs.Bool("stdin", false, "read ports from stdin")
+	return rangeSpec, filePath, fromStdin
+}
+
 func ctlAdd(args []string) error {
 	fs, pinDir := newPinFlagSet("add")
 	tls := fs.Bool("tls", false, "stock TLS fallback sockmap slot 1 (not the Tengine product path)")
+	rangeSpec, filePath, fromStdin := addBulkSourceFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	ports, err := portsFromArgs(fs.Args())
+	ports, err := collectBulkPorts(*rangeSpec, *filePath, *fromStdin, fs.Args())
 	if err != nil {
+		if *rangeSpec == "" && *filePath == "" && !*fromStdin && len(fs.Args()) == 0 {
+			return errors.New("open/add needs PORT, START-END, -range, -file, or -stdin")
+		}
 		return err
-	}
-	if len(ports) == 0 {
-		return errors.New("add needs PORT[,PORT...] or START-END")
 	}
 	return applyAdd(*pinDir, ports, ctlSlot(*tls), defaultBulkBatch, os.Stderr, len(ports) > 32)
 }
 
 func ctlRemove(args []string) error {
 	fs, pinDir := newPinFlagSet("remove")
+	rangeSpec, filePath, fromStdin := addBulkSourceFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	ports, err := portsFromArgs(fs.Args())
+	ports, err := collectBulkPorts(*rangeSpec, *filePath, *fromStdin, fs.Args())
 	if err != nil {
+		if *rangeSpec == "" && *filePath == "" && !*fromStdin && len(fs.Args()) == 0 {
+			return errors.New("close/remove needs PORT, START-END, -range, -file, or -stdin")
+		}
 		return err
-	}
-	if len(ports) == 0 {
-		return errors.New("remove needs PORT[,PORT...] or START-END")
 	}
 	return applyRemove(*pinDir, ports, defaultBulkBatch, os.Stderr, len(ports) > 32)
 }
@@ -114,26 +123,24 @@ func ctlList(args []string) error {
 
 func ctlBulk(args []string) error {
 	if len(args) == 0 {
-		return errors.New("bulk needs add | remove | fill")
+		return errors.New("bulk needs open|add | close|remove | fill")
 	}
 	switch args[0] {
-	case "add":
+	case "add", "open":
 		return ctlBulkAdd(args[1:])
-	case "remove":
+	case "remove", "close":
 		return ctlBulkRemove(args[1:])
 	case "fill":
 		return ctlBulkFill(args[1:])
 	default:
-		return fmt.Errorf("unknown bulk command %q (want add, remove, fill)", args[0])
+		return fmt.Errorf("unknown bulk command %q (want open/add, close/remove, fill)", args[0])
 	}
 }
 
 func ctlBulkAdd(args []string) error {
-	fs, pinDir := newPinFlagSet("bulk add")
+	fs, pinDir := newPinFlagSet("bulk open")
 	tls := fs.Bool("tls", false, "stock TLS fallback sockmap slot 1")
-	rangeSpec := fs.String("range", "", "inclusive port range START-END (e.g. 10000-39999)")
-	filePath := fs.String("file", "", "file of ports / ranges (one token or comma-list per line)")
-	fromStdin := fs.Bool("stdin", false, "read ports from stdin")
+	rangeSpec, filePath, fromStdin := addBulkSourceFlags(fs)
 	batch := fs.Int("batch", defaultBulkBatch, "BPF update chunk size")
 	quiet := fs.Bool("quiet", false, "suppress progress on stderr")
 	if err := fs.Parse(args); err != nil {
@@ -148,10 +155,8 @@ func ctlBulkAdd(args []string) error {
 }
 
 func ctlBulkRemove(args []string) error {
-	fs, pinDir := newPinFlagSet("bulk remove")
-	rangeSpec := fs.String("range", "", "inclusive port range START-END")
-	filePath := fs.String("file", "", "file of ports / ranges")
-	fromStdin := fs.Bool("stdin", false, "read ports from stdin")
+	fs, pinDir := newPinFlagSet("bulk close")
+	rangeSpec, filePath, fromStdin := addBulkSourceFlags(fs)
 	batch := fs.Int("batch", defaultBulkBatch, "delete chunk size")
 	quiet := fs.Bool("quiet", false, "suppress progress on stderr")
 	if err := fs.Parse(args); err != nil {

@@ -17,13 +17,15 @@ export CGO_ENABLED=0
 # HAH:   OPENRESTY_PREFIX=/usr/local/openresty-hah
 ./run-openresty-demo.sh start    # skip if already up
 
-# preferred M3 seed
+# preferred M3 seed (bulk open)
 ./scripts/m3-fill-ports.sh 30000
 ./scripts/m3-fill-ports.sh 60000
 
-# same thing, explicit CLI (range / file / stdin)
-sudo ./waf-sklookup-demo load-ports -range 5000-34999
+# bulk open / close — range or file, no OpenResty reload
+sudo ./waf-sklookup-demo bulk open  -range 5000-34999
+sudo ./waf-sklookup-demo bulk close -range 5000-34999
 sudo ./waf-sklookup-demo load-ports -file ports.txt
+sudo ./waf-sklookup-demo close-ports -file ports.txt
 sudo ./waf-sklookup-demo load-ports -stdin < ports.txt
 sudo ./waf-sklookup-demo bulk fill -count 30000 -start 5000
 sudo ./waf-sklookup-demo list -count
@@ -72,7 +74,7 @@ sudo ./waf-sklookup-demo add -tls 18444
 ./run-openresty-demo.sh list
 ```
 
-Aliases: `open`=`add`, `close`=`remove`, `dump`=`list`, `load-ports`=`bulk add`.
+Aliases: `open`=`add`, `close`=`remove`, `dump`=`list`, `load-ports`=`bulk open`, `close-ports`=`bulk close`.
 
 ## Bulk (M3 seed)
 
@@ -89,12 +91,12 @@ sudo ./waf-sklookup-demo bulk fill -count 60000 -start 5000
 ./scripts/m3-fill-ports.sh 60000
 ./run-openresty-demo.sh fill 30000
 
-# explicit range / file / stdin (load-ports == bulk add)
-sudo ./waf-sklookup-demo load-ports -range 10000-39999
+# explicit range / file / stdin
+sudo ./waf-sklookup-demo bulk open  -range 10000-39999
+sudo ./waf-sklookup-demo bulk close -range 10000-39999
 sudo ./waf-sklookup-demo load-ports -file ports.txt
+sudo ./waf-sklookup-demo close-ports -file ports.txt
 sudo ./waf-sklookup-demo load-ports -stdin < ports.txt
-sudo ./waf-sklookup-demo bulk add -range 10000-39999
-sudo ./waf-sklookup-demo bulk remove -range 10000-39999
 sudo ./waf-sklookup-demo list -count
 ```
 

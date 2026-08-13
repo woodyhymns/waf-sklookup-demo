@@ -13,7 +13,8 @@
 | M2-1 | add 后新端口打到 OpenResty，无 userspace LISTEN | `./run-openresty-demo.sh add 18083` 然后 `curl http://127.0.0.1:18083/` | ☐ |
 | M2-2 | remove 后该口失败，邻口仍通 | `./run-openresty-demo.sh remove 18083` | ☐ |
 | M2-3 | list / list -count | `sudo ./waf-sklookup-demo list` | ☐ |
-| M2-4 | bulk range 写入，无 nginx reload | `sudo ./waf-sklookup-demo bulk add -range 20000-20010` | ☐ |
+| M2-4 | bulk **open** range/file，无 nginx reload | `sudo ./waf-sklookup-demo bulk open -range 20000-20010` | ☐ |
+| M2-4b | bulk **close** range/file | `sudo ./waf-sklookup-demo bulk close -range 20000-20010` | ☐ |
 | M2-5 | **30K fill**（M3 入口） | `./scripts/m3-fill-ports.sh 30000` → `list -count` ≈ 30000+demo 口；elapsed 可接受 | ☐ |
 | M2-6 | **60K fill**（M3 入口） | `./scripts/m3-fill-ports.sh 60000` | ☐ |
 
