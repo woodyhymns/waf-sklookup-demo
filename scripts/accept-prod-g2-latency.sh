@@ -11,12 +11,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib-prod-gng.sh"
 
 STARTED_HERE=0
-cleanup() {
-  if [[ "$STARTED_HERE" -eq 1 ]]; then
-    demo_stop
-  fi
-}
-trap cleanup EXIT
+install_hygiene_traps
 
 # Calibrated defaults (do not inherit P0 DURATION/CONCURRENCY from lib).
 WARMUP="${G2_WARMUP:-${WARMUP:-3s}}"

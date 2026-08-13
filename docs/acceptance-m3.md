@@ -8,12 +8,14 @@
 
 压测矩阵**必须**含内存随端口规模变化，不只是吞吐/P99。
 
-**M2 seed (do this first):** `open_ports` is sized **131072** (was 1024 — that blocked this ladder). With the loader already running (`./run-openresty-demo.sh start`), flood the map without an OpenResty reload:
+**M2 seed:** `open_ports` is sized **131072**. On shared machines the default ladder is 100 → 1K → 10K, closing each tier before the next:
 
 ```bash
-./scripts/m3-fill-ports.sh 30000
-./scripts/m3-fill-ports.sh 60000
-# equivalent: sudo ./waf-sklookup-demo bulk fill -count 30000 -start 5000
+./scripts/accept-prod-p1-map-bytes.sh
+# Dedicated host only, explicit opt-in for the additional 30K/60K tiers:
+M3_FULL_LADDER=1 ./scripts/accept-prod-p1-map-bytes.sh
+# One isolated tier (the helper closes it and stops the demo on exit):
+./run-openresty-demo.sh start && ./scripts/m3-fill-ports.sh 1000
 ```
 
 See [docs/openresty-m2.md](openresty-m2.md). CLI bulk is the contract; HTTP API is not required for these fills.
@@ -23,7 +25,7 @@ See [docs/openresty-m2.md](openresty-m2.md). CLI bulk is the contract; HTTP API 
 | 基线（少端口，如 ≤10） | loader 7024 kB / OR 9916 kB · have=1 · QPS≈102 · CPU≈0 | open_ports max_entries **131072** memlock 10487488B（并存旧 1024 map） | Go @ a01b5b2 HAH+tengine-https-allow-http；baseline_after_start |
 | **30K** | loader 7024 kB / OR 10780 kB · have=30000 · QPS≈100 · CPU≈0 | same map 131072 / memlock ~10.5MB | bulk fill 30K in 8ms；after_bulk_30k |
 | **60K** | loader 7024 kB / OR 10784 kB · have=60000 · QPS≈85 · CPU≈0 | same map 131072 / memlock ~10.5MB | bulk fill 60K in 16ms；probe :34999 → HTTP 200 |
-| （可选）10 / 100 / 1K / 10K 中间点 | ☐ | ☐ | 对齐 perf-deep-compare 建连阶梯时可兼用 |
+| **100 / 1K / 10K（默认）** | ☐ | ☐ | shared-machine ladder；每层结束即 close |
 
 记录方式建议（执行时填实）：
 

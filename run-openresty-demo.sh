@@ -34,7 +34,7 @@ Usage: $0 [start|stop|verify|add PORT|remove PORT|list|load-ports ...|bulk ...|f
   close-ports        M2/M3: bulk close via -range / -file / -stdin
   bulk open|close|fill
                      M2: range/file/stdin or M3 seed (30K/60K); see docs/openresty-m2.md
-  fill COUNT [START] M3 helper: bulk fill COUNT ports from START (default 5000; 60K must fit in uint16)
+  fill COUNT [START] M3 helper: bulk fill COUNT ports from START (default 5000; >10K needs M3_FULL_LADDER=1)
   close-port PORT    Legacy alias for remove (optional --tls)
   open-port PORT     Legacy alias for add (optional --tls)
   dump-ports         Legacy alias for list
@@ -133,12 +133,13 @@ stop_openresty() {
     or_bin="$(find_openresty_bin || true)"
     conf="$(state_dir)/conf/nginx.conf"
     if [[ -n "$or_bin" && -f "$conf" ]]; then
-      "$or_bin" -p "$(state_dir)/runtime" -c "$conf" -s quit 2>/dev/null || true
+      "$or_bin" -p "$(state_dir)/runtime" -c "$conf" -s stop 2>/dev/null || true
     fi
   fi
   if command -v docker >/dev/null 2>&1; then
     docker compose -f openresty/docker-compose.yml down 2>/dev/null || true
   fi
+  sudo pkill -x openresty 2>/dev/null || true
 }
 
 build_loader() {
@@ -147,7 +148,6 @@ build_loader() {
 }
 
 start_loader() {
-  build_loader
   mkdir -p "$(state_dir)"
   local tls_args=()
   if [[ -n "${LOADER_TLS_PORTS}" ]]; then
@@ -185,6 +185,14 @@ stop_loader() {
     sudo kill "$(cat "$(state_dir)/loader.pid")" 2>/dev/null || true
     rm -f "$(state_dir)/loader.pid"
   fi
+  # loader.pid historically contained the sudo wrapper. Linux comm is 15 chars,
+  # so pkill -x cannot match waf-sklookup-demo / waf-sklookup-loader. Match the
+  # binary as a cmdline path component (not the repo directory name).
+  sudo pkill -TERM -f '(^|[ /])waf-sklookup-demo( |$)' 2>/dev/null || true
+  sudo pkill -TERM -f '(^|[ /])waf-sklookup-loader( |$)' 2>/dev/null || true
+  sleep 0.1
+  sudo pkill -KILL -f '(^|[ /])waf-sklookup-demo( |$)' 2>/dev/null || true
+  sudo pkill -KILL -f '(^|[ /])waf-sklookup-loader( |$)' 2>/dev/null || true
 }
 
 listen_ports_from_proc() {
@@ -313,6 +321,14 @@ probe_dual_protocol_same_port() {
 
 cmd_start() {
   mkdir -p "$(state_dir)"
+  # Removing the guard is the explicit-start opt-in. A stop racing this build
+  # recreates it; the post-build check then prevents delayed resurrection.
+  rm -f "$(state_dir)/stop-in-progress"
+  build_loader
+  if [[ -e "$(state_dir)/stop-in-progress" ]]; then
+    echo "Start cancelled: stop/cleanup began while the loader was building." >&2
+    return 1
+  fi
   start_openresty
   sleep 1
   start_loader
@@ -321,8 +337,20 @@ cmd_start() {
 }
 
 cmd_stop() {
+  mkdir -p "$(state_dir)"
+  : > "$(state_dir)/stop-in-progress"
+  if [[ -x "$LOADER_BIN" ]]; then
+    sudo "$LOADER_BIN" bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
+  fi
+  if [[ -x ./waf-sklookup-demo && "$LOADER_BIN" != "./waf-sklookup-demo" ]]; then
+    sudo ./waf-sklookup-demo bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
+  fi
   stop_loader
   stop_openresty
+  if [[ -d "$PIN_DIR" ]]; then
+    sudo find "$PIN_DIR" -mindepth 1 -maxdepth 1 -delete >/dev/null 2>&1 || true
+    sudo rmdir "$PIN_DIR" >/dev/null 2>&1 || true
+  fi
   echo "Stopped."
 }
 
@@ -453,8 +481,13 @@ cmd_fill() {
   local start="${2:-5000}"
   if [[ -z "$count" ]]; then
     echo "usage: $0 fill COUNT [START]" >&2
-    echo "M3 examples: $0 fill 30000    $0 fill 60000" >&2
+    echo "Shared-machine examples: $0 fill 100    $0 fill 1000    $0 fill 10000" >&2
+    echo "30K/60K requires M3_FULL_LADDER=1" >&2
     exit 1
+  fi
+  if (( count > 10000 )) && [[ "${M3_FULL_LADDER:-0}" != "1" ]]; then
+    echo "COUNT=$count is disabled on shared machines; set M3_FULL_LADDER=1 explicitly." >&2
+    exit 2
   fi
   ensure_loader_bin
   sudo ./waf-sklookup-demo bulk fill -count "$count" -start "$start" -pin-dir "$PIN_DIR"
@@ -492,7 +525,13 @@ cmd_dump_ports() {
   cmd_list
 }
 
-case "${1:-start}" in
+if [[ $# -eq 0 ]]; then
+  echo "A subcommand is required; nothing was started." >&2
+  usage >&2
+  exit 2
+fi
+
+case "$1" in
   start) cmd_start ;;
   stop) cmd_stop ;;
   verify) cmd_verify ;;

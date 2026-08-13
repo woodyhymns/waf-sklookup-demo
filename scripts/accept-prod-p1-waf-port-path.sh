@@ -20,16 +20,13 @@ RATE_WINDOW="${RATE_WINDOW:-2}"
 
 cleanup() {
   export OPENRESTY_NGINX_CONF="$ORIG_CONF"
-  # close deny port if we opened it
-  if [[ -x ./waf-sklookup-demo ]]; then
-    sudo ./waf-sklookup-demo remove -pin-dir "$PIN_DIR" "$DENY_PORT" >/dev/null 2>&1 || true
-  fi
-  if [[ "$STARTED_HERE" -eq 1 ]]; then
-    demo_stop || true
-  fi
   rm -f "$GEN_CONF" 2>/dev/null || true
+  hygiene_cleanup
 }
-trap cleanup EXIT
+trap 'cleanup' EXIT ERR
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 131' QUIT
+trap 'cleanup; exit 143' TERM
 
 echo "=== P1-c \$waf_external_port true path (ACL / log / limit) ==="
 require_hah
@@ -135,7 +132,7 @@ demo_start
 STARTED_HERE=1
 
 # Open deny port into map for ACL test
-sudo ./waf-sklookup-demo add -pin-dir "$PIN_DIR" "$DENY_PORT"
+sudo "$LOADER_BIN" add -pin-dir "$PIN_DIR" "$DENY_PORT"
 
 # Truncate access log for clean assertions
 : > "$STATE_DIR/logs/access.log" 2>/dev/null || true

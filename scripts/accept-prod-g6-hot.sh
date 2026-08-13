@@ -15,16 +15,12 @@ cleanup() {
     kill "$BG_PID" 2>/dev/null || true
     wait "$BG_PID" 2>/dev/null || true
   fi
-  if [[ -x ./waf-sklookup-demo ]]; then
-    local end=$((HOT_START + HOT_COUNT - 1))
-    if [[ "$end" -gt 65535 ]]; then end=65535; fi
-    sudo ./waf-sklookup-demo bulk close -range "${HOT_START}-${end}" -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
-  fi
-  if [[ "$STARTED_HERE" -eq 1 ]]; then
-    demo_stop
-  fi
+  hygiene_cleanup
 }
-trap cleanup EXIT
+trap 'cleanup' EXIT ERR
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 131' QUIT
+trap 'cleanup; exit 143' TERM
 
 # Calibrated defaults (do not inherit P0 DURATION/CONCURRENCY from lib).
 WARMUP="${G6_WARMUP:-2s}"
@@ -125,11 +121,11 @@ stop_bg() {
 echo "--- bulk open ${HOT_COUNT} ports ${HOT_START}-${END_PORT} (light bg during open) ---"
 start_bg
 T0=$(date +%s%N)
-sudo ./waf-sklookup-demo bulk open -range "${HOT_START}-${END_PORT}" -pin-dir "$PIN_DIR"
+sudo "$LOADER_BIN" bulk open -range "${HOT_START}-${END_PORT}" -pin-dir "$PIN_DIR"
 T1=$(date +%s%N)
 OPEN_MS=$(( (T1 - T0) / 1000000 ))
 echo "bulk_open_ms=$OPEN_MS"
-sudo ./waf-sklookup-demo list -count -pin-dir "$PIN_DIR" || true
+sudo "$LOADER_BIN" list -count -pin-dir "$PIN_DIR" || true
 stop_bg
 sleep "${G6_SETTLE:-3}"
 
@@ -152,7 +148,7 @@ fi
 echo "--- bulk close half ${HOT_START}-${HALF_END} (light bg during close) ---"
 start_bg
 T2=$(date +%s%N)
-sudo ./waf-sklookup-demo bulk close -range "${HOT_START}-${HALF_END}" -pin-dir "$PIN_DIR"
+sudo "$LOADER_BIN" bulk close -range "${HOT_START}-${HALF_END}" -pin-dir "$PIN_DIR"
 T3=$(date +%s%N)
 CLOSE_MS=$(( (T3 - T2) / 1000000 ))
 echo "bulk_close_half_ms=$CLOSE_MS"
