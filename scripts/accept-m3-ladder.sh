@@ -87,8 +87,10 @@ map_entries() {
 
 ensure_ports() {
   local want="$1"
-  local have cur need gen chunk i p list
-  have="$(sudo ./waf-sklookup-demo -mode dump-ports -pin-dir "$PIN_DIR" 2>/dev/null | rg -o '[0-9]+' | wc -l | tr -d ' ')"
+  local have need chunk i p list existing
+  existing="$(sudo ./waf-sklookup-demo -mode dump-ports -pin-dir "$PIN_DIR" 2>/dev/null | awk 'NF{print $1}' | rg '^[0-9]+$' | sort -u || true)"
+  have="$(printf '%s
+' "$existing" | rg -c '^[0-9]+$' || echo 0)"
   have="${have:-0}"
   if [[ "$have" -ge "$want" ]]; then
     echo "ports already >= $want (have $have)"
@@ -99,12 +101,11 @@ ensure_ports() {
   if [[ "$want" -ge 30000 && "$have_bulk" -eq 0 ]]; then
     echo "WARN: no M2 bulk API; using batched open-port (slow). Prefer LADDER without 30K/60K until M2." >&2
   fi
-  i=0
   list=()
-  # generate unique ports from BASE_PORT upward, skip well-known
   p=$BASE_PORT
-  while [[ ${#list[@]} -lt $need ]]; do
-    if [[ $p -lt 65535 && $p -ne 8080 && $p -ne 8443 ]]; then
+  while [[ ${#list[@]} -lt $need && $p -lt 65535 ]]; do
+    if [[ $p -ne 8080 && $p -ne 8443 ]] && ! printf '%s
+' "$existing" | rg -qx "$p"; then
       list+=("$p")
     fi
     p=$((p + 1))
@@ -188,7 +189,7 @@ for step in "${STEPS[@]}"; do
     or_sum=$((or_sum + $(rss_kb "$op")))
   done
   minfo="$(map_info | tr '\n' ' ' | tr ',' ';')"
-  have="$(sudo ./waf-sklookup-demo -mode dump-ports -pin-dir "$PIN_DIR" 2>/dev/null | rg -o '[0-9]+' | wc -l | tr -d ' ')"
+  have="$(sudo ./waf-sklookup-demo -mode dump-ports -pin-dir "$PIN_DIR" 2>/dev/null | awk 'NF{print $1}' | rg '^[0-9]+$' | sort -u | wc -l | tr -d ' ')"
   qps="$(sample_qps "$probe_port" "$QPS_DURATION")"
   cpu="$(sample_cpu "$LPID")"
   echo "$step,$step,$have,$lrss,$or_sum,\"$minfo\",$qps,$cpu,$note" >> "$OUT_CSV"
