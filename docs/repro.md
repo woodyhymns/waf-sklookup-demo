@@ -1,281 +1,301 @@
 # Reproduction pack: waf-sklookup-demo
 
-Goal: prove that **one** userspace `listen()` on `:18080` can serve extra TCP ports (`18081`, `18082`, `65500`) via Linux BPF **`sk_lookup`**, with **no** `bind`/`listen` on those steered ports.
+**Aligned to:** `main@ab66cf5` — *feat: P1 TLS in OpenResty + hide X-Waf-External-Port (#4)*
 
 Someone else following this file should see the same success/failure contrast.
 
+| Path | What it proves | Status on main@ab66cf5 |
+|------|----------------|------------------------|
+| **A. P1-A HAH (product)** | Same steered port: `http://` **and** `https://` → one internal listen with `https_allow_http` | **Primary — run this** |
+| **B. Stock 1.19.3.2 fallback** | Dual internal listens (`8080` + `8443 ssl`); TLS on separate steered port | Labeled fallback only |
+| **C. M1 HTTP / toy** | Earlier wiring / kernel-only proof | Secondary |
+
+QA: [acceptance-p1.md](acceptance-p1.md) · Design: [openresty-p1.md](openresty-p1.md) · HAH evidence: [acceptance-p1-a-hah-run.log](acceptance-p1-a-hah-run.log) · Build: [third_party/https_allow_http/README.md](../third_party/https_allow_http/README.md)
+
 ---
 
-## 1. Environment prerequisites
+## A. P1-A — OpenResty-HAH / `https_allow_http` (product)
+
+### A.1 Goal
+
+```
+Client :18081   http://  OR  https://
+        │  sk_lookup  (open_ports → redir_socket[0] only; no -tls-ports)
+        ▼
+OpenResty-HAH  listen 127.0.0.1:8080 ssl https_allow_http
+        │  engine peeks TLS ClientHello vs HTTP
+        access_by_lua → $waf_external_port
+        ▼
+Body "OpenResty M1 OK"  scheme=http|https  waf_external_port=18081
+Default: NO X-Waf-External-Port header
+```
+
+Prove:
+
+1. Userspace LISTEN only on the **one** internal port (`127.0.0.1:8080`).
+2. **Same** steered port answers both plaintext HTTP and TLS.
+3. `$waf_external_port` / body = client destination (not `8080`); default response **hides** `X-Waf-External-Port`.
+4. Engine is OpenResty **1.19.3.2** built with the HAH patch (`OPENRESTY_PREFIX=/usr/local/openresty-hah`).
+
+### A.2 Environment prerequisites
 
 | Item | Requirement | How to check |
 |------|-------------|--------------|
-| OS | Linux | `uname -s` → `Linux` |
-| Kernel | ≥ 5.9 (HCE 2.0 / 5.10 OK) | `uname -r` |
-| `sk_lookup` | Present in BPF features | See below |
-| Privileges | root, or `CAP_BPF` + `CAP_NET_ADMIN` (and usually `CAP_PERFMON` / `CAP_SYS_ADMIN` depending on distro) | `id -u` → `0`, or run under `sudo` |
-| Go | 1.22+ | `go version` |
-| Toolchain | `clang`, `llvm`, libbpf headers (`linux-libc-dev` / `libbpf-dev`) | `clang --version` |
-| Optional | `bpftool`, `curl`, `ss` (`iproute2`) | for feature check + verify |
+| OS / kernel | Linux ≥ 5.9 + `sk_lookup` | `uname -r`; `sudo bpftool feature list_builtins prog_types \| rg sk_lookup` |
+| Privileges | root / `CAP_BPF` | loader via `sudo` |
+| Go / clang | Go 1.22+, `CGO_ENABLED=0`, clang + headers | `go version`; `clang --version` |
+| **OpenResty-HAH** | Patched 1.19.3.2 at **`/usr/local/openresty-hah`** | See A.2.1 |
+| Certs | Demo self-signed under `openresty/certs/` | `make certs` |
+| Helpers | curl (`-k` for HTTPS), `ss` optional | |
 
-### Confirm `sk_lookup`
+Stock `/usr/local/openresty` **cannot** parse `https_allow_http` — do **not** use it for path A.
 
-```bash
-# Preferred
-sudo bpftool feature 2>/dev/null | grep -i sk_lookup
-
-# Fallback: kernel version
-uname -r
-# Expect 5.9+ (and a distro that actually built sk_lookup in).
-```
-
-If `bpftool` shows no `sk_lookup` / `BPF_PROG_TYPE_SK_LOOKUP`, **stop** — this demo cannot work on that kernel.
-
-### Install deps (Debian/Ubuntu example)
+#### A.2.1 Build / confirm OpenResty-HAH
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y clang llvm libbpf-dev linux-libc-dev golang-go iproute2 curl
-# Optional but useful:
-sudo apt-get install -y linux-tools-common linux-tools-$(uname -r) || true
+# From repo root (does NOT overwrite stock /usr/local/openresty)
+./third_party/https_allow_http/build-openresty-hah.sh
+
+export OPENRESTY_PREFIX=/usr/local/openresty-hah
+"$OPENRESTY_PREFIX/bin/openresty" -v 2>&1
+# Expect: nginx version: openresty/1.19.3.2
+
+# Capability: listen flag must be accepted (invalid parameter = wrong binary)
 ```
 
-### Ports that must be free
+If the prefix already exists on the shared box (Test’s HAH run), skip rebuild and export the same prefix.
 
-Defaults used below:
+#### A.2.2 Ports that must be free
 
-- Real bind: `127.0.0.1:18080`
-- Steered (no userspace bind): `18081`, `18082`, `65500`
+| Role | Address |
+|------|---------|
+| HAH internal listen (HTTP+TLS) | `127.0.0.1:8080` |
+| Steered (no userspace bind) | `18081`, `18082`, `65500` |
 
 ```bash
-ss -lntp | grep -E '18080|18081|18082|65500' || echo "ports free (good)"
+ss -lntp | grep -E ':(8080|18081|18082|65500)\b' || echo "ports free (good)"
 ```
 
----
-
-## 2. Step-by-step: build → run → curl contrast → ss proof
-
-Work from the shared tree (or a clone):
+### A.3 Preferred one-shot (Test harness)
 
 ```bash
 cd /workspace/waf-sklookup-demo
-# or: git clone https://github.com/woodyhymns/waf-sklookup-demo.git && cd waf-sklookup-demo
+# pin: git checkout ab66cf5   # or current main after that merge
+export CGO_ENABLED=0
+
+OPENRESTY_PREFIX=/usr/local/openresty-hah \
+  ./scripts/accept-p1-a-dual.sh
+# defaults also set:
+#   OPENRESTY_NGINX_CONF=openresty/nginx.tengine-https-allow-http.conf.example
+#   LOADER_TLS_PORTS=   (empty → no stock 8443/-tls-ports split)
 ```
 
-### 2.1 Build
+Expect **EXIT 0** and `P1-A PASS: same port :18081 HTTP + HTTPS both hit engine`.
+
+### A.4 Manual steps (same as harness)
 
 ```bash
-# Generates dispatch_bpfel.go / .o via bpf2go, then builds the binary
-make build
-# equivalent:
-#   go generate ./...
-#   go build -o waf-sklookup-demo .
-```
+export CGO_ENABLED=0
+export OPENRESTY_PREFIX=/usr/local/openresty-hah
+export OPENRESTY_NGINX_CONF=openresty/nginx.tengine-https-allow-http.conf.example
+export LOADER_TLS_PORTS=""          # critical: product path, no -tls-ports
 
-Expect: binary `./waf-sklookup-demo` appears; no clang/bpf2go errors.
+make certs
+make build && make test
 
-### 2.2 Run (terminal A — keep it open)
+./run-openresty-demo.sh stop >/dev/null 2>&1 || true
+./run-openresty-demo.sh start
+./run-openresty-demo.sh verify      # same-port HTTPS must PASS on HAH (not N/A)
 
-```bash
-sudo ./waf-sklookup-demo -listen 127.0.0.1:18080 -ports 18081,18082,65500
-# or: ./run.sh
-# or: make run
-```
+# Explicit P1-A pair
+curl -sS -D- http://127.0.0.1:18081/
+curl -sk -D- https://127.0.0.1:18081/   # -k: demo cert
 
-Leave this process running until verify is done. Ctrl+C stops it and detaches the program.
+# Bind proof — only :8080
+ss -lntp | grep -E ':(8080|18081|18082|65500|8443|18443)\b'
 
-### 2.3 Curl contrast (terminal B)
+# Header policy (default hide)
+curl -sS -D- -o /dev/null http://127.0.0.1:18081/ | grep -i X-Waf-External-Port \
+  || echo "no X-Waf-External-Port (expected)"
 
-**A. Real bind (always works while demo is up):**
+# Optional: expose debug header
+WAF_EXPOSE_EXTERNAL_PORT=1 ./run-openresty-demo.sh stop
+WAF_EXPOSE_EXTERNAL_PORT=1 ./run-openresty-demo.sh start
+curl -sS -D- http://127.0.0.1:18081/ | grep -i X-Waf-External-Port
+# X-Waf-External-Port: 18081
 
-```bash
-curl -sS http://127.0.0.1:18080/
-```
-
-**B. Steered ports (must work *with* BPF attached):**
-
-```bash
+# Map edit
+./run-openresty-demo.sh close-port 18081
+curl -sS --max-time 3 http://127.0.0.1:18081/ || echo "closed (expected)"
+./run-openresty-demo.sh open-port 18081
 curl -sS http://127.0.0.1:18081/
-curl -sS http://127.0.0.1:18082/
-curl -sS http://127.0.0.1:65500/
+
+./run-openresty-demo.sh stop
 ```
 
-**C. Negative control — stop the demo (Ctrl+C in terminal A), then:**
+Manual loader equivalent (no helper):
 
 ```bash
-curl -sS --connect-timeout 2 http://127.0.0.1:18081/ || echo "steered port failed without BPF (expected)"
+# OpenResty already listening with tengine example conf on 127.0.0.1:8080
+sudo ./waf-sklookup-demo -mode openresty \
+  -target 127.0.0.1:8080 \
+  -ports 18081,18082,65500
+# no -tls-ports / no -tls-target
 ```
 
-Without the process / BPF attach, steered-port curls must fail. `:18080` also fails once the process is gone (that one really was bound).
+### A.5 Expected output samples (from Test HAH run)
 
-Optional sharper negative: if you can load a build that listens but skips attach (not in-tree), steered ports fail while `:18080` still works. Stock demo attaches before serving, so process-down is the practical negative.
-
-### 2.4 Prove no userspace bind on steered ports (while demo is running)
-
-```bash
-ss -lntp | grep -E '18080|18081|18082|65500'
-```
-
-Expect:
-
-- One listener on `127.0.0.1:18080` (the Go process).
-- **No** lines for `18081`, `18082`, or `65500`.
-
-```bash
-ss -lntp | grep -E '18081|18082|65500' || echo "no userspace listeners (expected)"
-```
-
-That is the core proof: curls to steered ports succeed, but `ss` shows no bind there.
-
----
-
-## 3. Expected output samples
-
-### 3.1 Success — process startup (terminal A)
+#### Success — start
 
 ```text
-2026/08/13 00:00:00 sk_lookup attached to current netns
-2026/08/13 00:00:00 registered listening socket fd=7 for 127.0.0.1:18080
-2026/08/13 00:00:00 opened steered port 18081 (no userspace bind on that port)
-2026/08/13 00:00:00 opened steered port 18082 (no userspace bind on that port)
-2026/08/13 00:00:00 opened steered port 65500 (no userspace bind on that port)
-2026/08/13 00:00:00 HTTP server serving on 127.0.0.1:18080 (and steered ports)
-======== DEMO READY ========
-Real bind:   curl -sS http://127.0.0.1:18080/
-Steered:     curl -sS http://127.0.0.1:18081/
-Steered:     curl -sS http://127.0.0.1:18082/
-Steered:     curl -sS http://127.0.0.1:65500/
-Without BPF those steered ports would fail to connect.
-Ctrl+C to stop.
-============================
+Using nginx conf: openresty/nginx.tengine-https-allow-http.conf.example
+OpenResty started (local) nginx version: openresty/1.19.3.2 ... expose=off
+Loader PID ...
 ```
 
-(Timestamps / fd numbers vary.)
-
-### 3.2 Success — curl on real + steered ports (terminal B)
-
-Each of `18080` / `18081` / `18082` / `65500` should return something like:
+#### Success — P1-A same port
 
 ```text
-sk_lookup demo OK
-server_listen=127.0.0.1:18080
-http_local_addr=127.0.0.1:18080
-remote=127.0.0.1:54321
-host=127.0.0.1:18081
-path=/
+=== P1-A same port HTTP ===
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+
+=== P1-A same port HTTPS ===
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=https
+remote_addr=127.0.0.1
+PASS: default hide header
+P1-A PASS: same port :18081 HTTP + HTTPS both hit engine
 ```
 
-Notes:
-
-- Body always says `server_listen=127.0.0.1:18080` (single real listen).
-- `host=` reflects the port the client used in the URL (e.g. `18081`).
-- `http_local_addr` often still shows the *listening* socket address (`:18080`) even when the client hit a steered port — that is normal for this demosock assignment path; do not treat it as a fail.
-
-### 3.3 Success — `ss` proof
+#### Success — summary block
 
 ```text
-LISTEN 0  4096  127.0.0.1:18080  0.0.0.0:*  users:(("waf-sklookup-d",pid=1234,fd=6))
+OPENRESTY_PREFIX=/usr/local/openresty-hah
+openresty/1.19.3.2 with https_allow_http
+P1-A: http://127.0.0.1:18081/ → scheme=http waf_external_port=18081
+P1-A: https://127.0.0.1:18081/ → scheme=https waf_external_port=18081
+OVERALL: PASS
 ```
 
-And:
+#### Failure samples
 
-```text
-no userspace listeners (expected)
-```
+| Situation | Typical signal |
+|-----------|----------------|
+| Stock OpenResty used by mistake | `invalid parameter "https_allow_http"` / harness exit 3 `BLOCKED` |
+| `LOADER_TLS_PORTS` left at default `18443` | Stock split path; same-port HTTPS may N/A or miss product proof |
+| Missing HAH prefix | `FAIL: OPENRESTY_PREFIX=... has no bin/openresty` |
+| No certs | `make certs` / start fails on ssl_certificate paths |
+| HTTPS on stock single HTTP listen | connection fail / wrong scheme — expected N/A on stock, **FAIL** on HAH |
+| Default header leak | `X-Waf-External-Port` present without `WAF_EXPOSE_EXTERNAL_PORT=1` |
 
-when grepping only steered ports.
-
-### 3.4 Failure samples
-
-**No root / missing caps:**
-
-```text
-load BPF: ... permission denied
-(hint: need root/CAP_BPF and kernel sk_lookup)
-```
-
-or attach fails:
-
-```text
-attach sk_lookup: ... operation not permitted
-```
-
-**Kernel without `sk_lookup`:**
-
-```text
-load BPF: ... 
-```
-
-or
-
-```text
-attach sk_lookup: ... invalid argument / not supported
-```
-
-**Port already in use on real listen:**
-
-```text
-listen 127.0.0.1:18080: bind: address already in use
-```
-
-**Steered curl without demo / without BPF (expected fail):**
-
-```text
-curl: (7) Failed to connect to 127.0.0.1 port 18081: Connection refused
-steered port failed without BPF (expected)
-```
-
-**bpf2go / clang failure at generate:**
-
-```text
-Error: ... clang ... not found
-```
-
-or missing headers:
-
-```text
-fatal error: 'linux/bpf.h' file not found
-```
-
----
-
-## 4. Common pitfalls
+### A.6 Common pitfalls (HAH / P1-A)
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| Attach/load fails with “not supported” / weird errno | Kernel has no `sk_lookup` (&lt; 5.9 or feature stripped) | Use a ≥5.9 kernel with sk_lookup; verify with `bpftool feature` |
-| Permission denied on load/attach | Not root / missing caps | `sudo ./waf-sklookup-demo ...` |
-| `address already in use` on `:18080` | Another process holds the real listen port | `ss -lntp \| grep 18080`, stop the other listener or change `-listen` |
-| Steered curls fail but `:18080` works | BPF not attached, wrong netns, or ports not in `-ports` | Check startup logs for “sk_lookup attached” and “opened steered port”; same netns as the client |
-| `go generate` / bpf2go fails | No `clang`, or missing `libbpf` / kernel UAPI headers | Install `clang llvm libbpf-dev linux-libc-dev` |
-| `go: ... go.mod requires go >= 1.22` | Old Go toolchain | Install Go 1.22+ |
-| Demo works on host, fails in container | Container runtime blocks BPF / netns attach | Privileged (or suitable caps) + host kernel that supports sk_lookup; attach is to *current* netns |
-| Expect `ss` to show steered ports | Misunderstanding the demo | Steered ports must **not** appear in `ss -lntp`; that is the point |
-| IPv6-only curl / wrong host | Listening on `127.0.0.1` only | Use `http://127.0.0.1:...` as documented, not `localhost` if that resolves to `::1` |
+| `invalid parameter "https_allow_http"` | Using stock `/usr/local/openresty` | `export OPENRESTY_PREFIX=/usr/local/openresty-hah` |
+| Same-port HTTPS fails | Wrong conf or TLS ports fallback | Set `OPENRESTY_NGINX_CONF=...tengine...example` and `LOADER_TLS_PORTS=""` |
+| Docs/ss show 8080+8443 | Stock fallback still running | Stop demo; restart with HAH env above |
+| Treating 8080=HTTP / 8443=TLS as product | Stale model | Product is **one** listen + `https_allow_http` |
+| Header always visible | Expose env left on | Restart without `WAF_EXPOSE_EXTERNAL_PORT` |
+
+### A.7 Minimal checklist (P1-A)
+
+- [ ] `OPENRESTY_PREFIX=/usr/local/openresty-hah` and `openresty -v` → 1.19.3.2  
+- [ ] `nginx -t` accepts `listen ... ssl https_allow_http` (not “invalid parameter”)  
+- [ ] `ss`: LISTEN only on `127.0.0.1:8080` (no steered ports; no required `:8443`)  
+- [ ] `curl http://127.0.0.1:18081/` → `OpenResty M1 OK` `scheme=http` `waf_external_port=18081`  
+- [ ] `curl -sk https://127.0.0.1:18081/` → same with `scheme=https`  
+- [ ] Default response has **no** `X-Waf-External-Port`  
+- [ ] Optional: `./scripts/accept-p1-a-dual.sh` exits 0  
 
 ---
 
-## 5. Minimal pass/fail checklist
+## B. Stock OpenResty 1.19.3.2 fallback (not product)
 
-Copy this when filing or handing off:
+Use when you only have the public image / stock prefix and need TLS handshake proof. **Does not** satisfy P1-A.
 
-- [ ] `uname -r` ≥ 5.9 and/or `bpftool feature` shows sk_lookup  
-- [ ] `make build` succeeds  
-- [ ] `sudo ./waf-sklookup-demo ...` prints `DEMO READY`  
-- [ ] `curl` to `:18080`, `:18081`, `:18082`, `:65500` all return `sk_lookup demo OK`  
-- [ ] `ss -lntp` shows listener **only** on `:18080`, not on steered ports  
-- [ ] After Ctrl+C, steered `curl` fails  
+```bash
+export CGO_ENABLED=0
+# unset HAH product overrides
+unset OPENRESTY_NGINX_CONF
+# default helper uses openresty/nginx.conf + LOADER_TLS_PORTS=18443
+export OPENRESTY_PREFIX=/usr/local/openresty   # or docker compose
 
-If all six are true, reproduction succeeded.
+make certs && make build
+./run-openresty-demo.sh start
+./run-openresty-demo.sh verify   # same-port HTTPS → N/A on stock (must not fail verify)
+
+curl -sS -D- http://127.0.0.1:18081/
+curl -sk -D- https://127.0.0.1:18443/   # steered → :8443 ssl
+
+ss -lntp | grep -E ':(8080|8443|18081|18443)\b'
+# Expect LISTEN on 8080 and 8443 only
+./run-openresty-demo.sh stop
+```
+
+Loader shape:
+
+```bash
+sudo ./waf-sklookup-demo -mode openresty \
+  -target 127.0.0.1:8080 -ports 18081,18082,65500 \
+  -tls-target 127.0.0.1:8443 -tls-ports 18443
+```
+
+Details: [openresty-p1.md](openresty-p1.md) “Stock OpenResty 1.19.3.2”.
 
 ---
 
-## 6. Scope / non-goals
+## C. M1 HTTP-only / toy (secondary)
 
-- This pack is a **kernel steering proof**, not a full WAF/OpenResty integration.
-- No production customer data, no production deploys, no GitHub push from this pack.
-- Design context (thin-accept vs sk_lookup, perf notes): see sibling docs under `docs/`.
+### C.1 M1 OpenResty HTTP (no TLS requirement)
 
-## 7. OpenResty M1 wiring
+```bash
+export CGO_ENABLED=0
+export OPENRESTY_PREFIX=/usr/local/openresty   # stock OK for HTTP-only M1
+make build
+./run-openresty-demo.sh start
+./run-openresty-demo.sh verify
+./run-openresty-demo.sh close-port 18081
+./run-openresty-demo.sh stop
+```
 
-The toy HTTP path above remains valid. For **sk_lookup → OpenResty** (fixed internal listen + `$waf_external_port`), follow **[docs/openresty-m1.md](openresty-m1.md)** (M1 HTTP) and **[docs/openresty-p1.md](openresty-p1.md)** (P1 TLS + header policy). Helper: `./run-openresty-demo.sh start && ./run-openresty-demo.sh verify`. HTTPS on the stock image uses `curl -k` against the fallback TLS port.
+See [openresty-m1.md](openresty-m1.md) and [acceptance-m1.md](acceptance-m1.md). Do not treat toy body as M1.
+
+### C.2 Toy Go HTTP
+
+```bash
+export CGO_ENABLED=0
+make build
+sudo ./waf-sklookup-demo -mode toy -listen 127.0.0.1:18080 -ports 18081,18082,65500
+# curl :18080/:18081 → "sk_lookup demo OK"
+# ss: LISTEN only on :18080
+```
+
+---
+
+## Loader flags (quick ref)
+
+| Flag | Default | Notes |
+|------|---------|-------|
+| `-mode` | `toy` | `openresty`, `close-port`, `open-port`, `dump-ports` |
+| `-target` | `127.0.0.1:8080` | Sockmap slot 0 |
+| `-ports` | `18081,18082,65500` | → slot 0 |
+| `-tls-target` / `-tls-ports` | `127.0.0.1:8443` / empty | **Stock fallback only**; leave `-tls-ports` empty for HAH/product |
+| `-pin-dir` | `/sys/fs/bpf/waf-sklookup` | Pinned maps |
+
+Helper env: `OPENRESTY_PREFIX`, `OPENRESTY_NGINX_CONF`, `LOADER_TLS_PORTS` (empty string skips TLS fallback), `WAF_EXPOSE_EXTERNAL_PORT`.
+
+---
+
+## Scope / non-goals
+
+- No production customer data, no production deploys; **Repo** owns GitHub push/merge.
+- M2 control plane / M3 perf matrix: out of scope ([acceptance-m3.md](acceptance-m3.md)).
+- Multi-worker reuseport sockmap: out of scope.
+- Design context: [design-thin-accept-openresty.md](design-thin-accept-openresty.md).
