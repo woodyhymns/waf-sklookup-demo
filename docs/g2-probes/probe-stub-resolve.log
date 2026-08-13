@@ -1,0 +1,15 @@
+probe first=A mode=keepalive N=5 c=8 d=20s
+started=2026-08-13T02:25:38Z
+--- A block ---
+RESULT label=A-keepalive-s1 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20s ok=741959 fail=0 total=741959 rps=37097.4 p50_us=195 p90_us=276 p99_us=514 max_us=9007 bytes=67518269
+RESULT label=A-keepalive-s2 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20s ok=799056 fail=0 total=799056 rps=39952.6 p50_us=191 p90_us=275 p99_us=501 max_us=6869 bytes=72714096
+RESULT label=A-keepalive-s3 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20s ok=715173 fail=0 total=715173 rps=35758.4 p50_us=200 p90_us=294 p99_us=526 max_us=5669 bytes=65080743
+RESULT label=A-keepalive-s4 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20s ok=748032 fail=0 total=748032 rps=37401.3 p50_us=196 p90_us=277 p99_us=513 max_us=9142 bytes=68070912
+RESULT label=A-keepalive-s5 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20s ok=759481 fail=0 total=759481 rps=37973.7 p50_us=195 p90_us=267 p99_us=498 max_us=8113 bytes=69112771
+--- B block ---
+RESULT label=B-keepalive-s1 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20s ok=745936 fail=0 total=745936 rps=37296.3 p50_us=196 p90_us=282 p99_us=501 max_us=7814 bytes=67880176
+RESULT label=B-keepalive-s2 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20s ok=905862 fail=0 total=905862 rps=45292.8 p50_us=146 p90_us=223 p99_us=691 max_us=12080 bytes=82433442
+RESULT label=B-keepalive-s3 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20s ok=910771 fail=0 total=910771 rps=45538.2 p50_us=148 p90_us=218 p99_us=673 max_us=8432 bytes=82880161
+RESULT label=B-keepalive-s4 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20s ok=886725 fail=0 total=886725 rps=44335.9 p50_us=153 p90_us=225 p99_us=686 max_us=7077 bytes=80691975
+RESULT label=B-keepalive-s5 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20s ok=899681 fail=0 total=899681 rps=44983.6 p50_us=145 p90_us=223 p99_us=740 max_us=7687 bytes=81870971
+SUMMARY first=A mode=keepalive medA_p99_us=513 medB_p99_us=686 ratio=1.3372 A_samples=514 501 526 513 498 B_samples=501 691 673 686 740

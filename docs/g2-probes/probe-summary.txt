@@ -1,0 +1,26 @@
+# HTTP G2 measurement probes for Repro
+
+Branch: `test/prod-gng-acceptance` @ `7ae1579`
+Method base: httpbench c=8 d=20s warmup=3s N=5; median of N p99_us; ratio = med_B/med_A
+Env: OPENRESTY_PREFIX=/usr/local/openresty-hah; LOADER_TLS_PORTS empty; CGO_ENABLED=0
+Baseline (prior A-then-B keepalive block): HTTP rel ratio ~ 1.2897
+
+| probe | med_A | med_B | ratio | note |
+|-------|------:|------:|------:|------|
+| 1 B-then-A keepalive | 19329 | 10879 | 0.5628 | order flip vs baseline A-then-B; log /tmp/gng-g2g6/probe-b-then-a.log |
+| 2 A-then-B short-conn | 216561 | 271028 | 1.2515 | no -keepalive (DisableKeepAlives); N=5 c=8 d=20s; log /tmp/gng-g2g6/probe-short.log |
+| 3 stub resolve() A-then-B keepalive | 513 | 686 | 1.3372 | _M.resolve returns constant "18081" (no /proc/self/net/tcp scan); lua restored after; log /tmp/gng-g2g6/probe-stub-resolve.log |
+
+## Ratios
+
+- PROBE1_RATIO=0.5628
+- PROBE2_RATIO=1.2515
+- PROBE3_RATIO=1.3372
+
+## Logs
+
+- `/tmp/gng-g2g6/probe-b-then-a.log`
+- `/tmp/gng-g2g6/probe-short.log`
+- `/tmp/gng-g2g6/probe-stub-resolve.log`
+
+Hold merge. No push.

@@ -1,0 +1,15 @@
+probe first=A mode=short N=5 c=8 d=20s
+started=2026-08-13T02:21:31Z
+--- A block ---
+RESULT label=A-short-s1 mode=short url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.14s ok=1740 fail=0 total=1740 rps=86.4 p50_us=97206 p90_us=136448 p99_us=148611 max_us=190000 bytes=156601
+RESULT label=A-short-s2 mode=short url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.164s ok=1142 fail=0 total=1142 rps=56.6 p50_us=155019 p90_us=185506 p99_us=207258 max_us=224087 bytes=102780
+RESULT label=A-short-s3 mode=short url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.191s ok=914 fail=0 total=914 rps=45.3 p50_us=191565 p90_us=232739 p99_us=258382 max_us=274177 bytes=82260
+RESULT label=A-short-s4 mode=short url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.154s ok=1048 fail=0 total=1048 rps=52.0 p50_us=174620 p90_us=215478 p99_us=230850 max_us=247391 bytes=94320
+RESULT label=A-short-s5 mode=short url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.144s ok=1208 fail=0 total=1208 rps=60.0 p50_us=149952 p90_us=192263 p99_us=216561 max_us=233563 bytes=108720
+--- B block ---
+RESULT label=B-short-s1 mode=short url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.206s ok=1082 fail=0 total=1082 rps=53.5 p50_us=159260 p90_us=224323 p99_us=253172 max_us=294357 bytes=98462
+RESULT label=B-short-s2 mode=short url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.182s ok=1155 fail=0 total=1155 rps=57.2 p50_us=149049 p90_us=207425 p99_us=305416 max_us=315672 bytes=105103
+RESULT label=B-short-s3 mode=short url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.15s ok=1095 fail=0 total=1095 rps=54.3 p50_us=156574 p90_us=216939 p99_us=271028 max_us=291613 bytes=99645
+RESULT label=B-short-s4 mode=short url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.183s ok=1093 fail=0 total=1093 rps=54.2 p50_us=165023 p90_us=208377 p99_us=236675 max_us=319123 bytes=99463
+RESULT label=B-short-s5 mode=short url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.206s ok=1036 fail=0 total=1036 rps=51.3 p50_us=161183 p90_us=233685 p99_us=271208 max_us=326712 bytes=94276
+SUMMARY first=A mode=short medA_p99_us=216561 medB_p99_us=271028 ratio=1.2515 A_samples=148611 207258 258382 230850 216561 B_samples=253172 305416 271028 236675 271208

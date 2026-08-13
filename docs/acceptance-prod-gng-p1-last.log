@@ -1,0 +1,303 @@
+nginx version: openresty/1.19.3.2
+########## P1-a BPF map bytes curve (memlock vs RSS) ##########
+=== P1-a BPF map bytes curve (memlock vs process RSS) ===
+nginx version: openresty/1.19.3.2
+certs already present: /workspace/waf-sklookup-demo/openresty/certs/demo.crt /workspace/waf-sklookup-demo/openresty/certs/demo.key (FORCE=1 to regenerate)
+Using nginx conf: openresty/nginx.tengine-https-allow-http.conf.example
+nginx: the configuration file /tmp/waf-sklookup-m1/conf/nginx.conf syntax is ok
+nginx: configuration file /tmp/waf-sklookup-m1/conf/nginx.conf test is successful
+OpenResty started (local) nginx version: openresty/1.19.3.2 prefix=/tmp/waf-sklookup-m1/runtime config=/tmp/waf-sklookup-m1/conf/nginx.conf expose=off
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfel.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfel.go
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfeb.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfeb.go
+Loader PID 263482
+Run './run-openresty-demo.sh verify' to check steered HTTP/HTTPS ports.
+Default: X-Waf-External-Port is hidden. Restart with WAF_EXPOSE_EXTERNAL_PORT=1 to expose it.
+NOTE: BPF map memlock is kernel-charged memory; it is NOT loader/OpenResty process RSS.
+--- bpftool open_ports (raw) ---
+246: hash  name open_ports  flags 0x0
+	key 2B  value 1B  max_entries 131072  memlock 10487488B
+	btf_id 266
+--- baseline (few ports) ---
+SAMPLE have=3 memlock_B=10487488 max_entries=131072 loader_rss_kB=7008 or_rss_kB=8308 note=baseline_after_start
+--- bulk fill 30000 ---
+M3 fill: count=30000 start=5000 skip="8080,8443" pin=/sys/fs/bpf/waf-sklookup (no OpenResty reload)
+add 4096/30000 (13.7%) elapsed=1ms rate=3326163/s
+add 8192/30000 (27.3%) elapsed=2ms rate=3499914/s
+add 12288/30000 (41.0%) elapsed=3ms rate=3619473/s
+add 16384/30000 (54.6%) elapsed=4ms rate=3733724/s
+add 20480/30000 (68.3%) elapsed=5ms rate=3842438/s
+add 24576/30000 (81.9%) elapsed=6ms rate=3934268/s
+add 28672/30000 (95.6%) elapsed=7ms rate=3956875/s
+add 30000/30000 (100.0%) elapsed=8ms rate=3919404/s
+added n=30000 slot=0 (primary) elapsed=8ms method=batch
+SAMPLE have=30001 memlock_B=10487488 max_entries=131072 loader_rss_kB=7008 or_rss_kB=8308 note=after_bulk_30k
+--- bulk fill 60000 ---
+M3 fill: count=60000 start=5000 skip="8080,8443" pin=/sys/fs/bpf/waf-sklookup (no OpenResty reload)
+add 4096/60000 (6.8%) elapsed=1ms rate=3077554/s
+add 8192/60000 (13.7%) elapsed=3ms rate=3151710/s
+add 12288/60000 (20.5%) elapsed=4ms rate=3335923/s
+add 16384/60000 (27.3%) elapsed=5ms rate=3453670/s
+add 20480/60000 (34.1%) elapsed=6ms rate=3610141/s
+add 24576/60000 (41.0%) elapsed=7ms rate=3720587/s
+add 28672/60000 (47.8%) elapsed=8ms rate=3817215/s
+add 32768/60000 (54.6%) elapsed=8ms rate=3906572/s
+add 36864/60000 (61.4%) elapsed=9ms rate=3974033/s
+add 40960/60000 (68.3%) elapsed=10ms rate=4001977/s
+add 45056/60000 (75.1%) elapsed=11ms rate=4044272/s
+add 49152/60000 (81.9%) elapsed=12ms rate=4063112/s
+add 53248/60000 (88.7%) elapsed=13ms rate=4078446/s
+add 57344/60000 (95.6%) elapsed=14ms rate=4081912/s
+add 60000/60000 (100.0%) elapsed=15ms rate=4080708/s
+added n=60000 slot=0 (primary) elapsed=15ms method=batch
+SAMPLE have=60001 memlock_B=10487488 max_entries=131072 loader_rss_kB=7008 or_rss_kB=8308 note=after_bulk_60k
+--- optional near-full fill count=60500 (100K unique N/A: u16 keys) ---
+M3 fill: count=60500 start=5000 skip="8080,8443" pin=/sys/fs/bpf/waf-sklookup (no OpenResty reload)
+add 4096/60500 (6.8%) elapsed=2ms rate=2688592/s
+add 8192/60500 (13.5%) elapsed=3ms rate=2917247/s
+add 12288/60500 (20.3%) elapsed=4ms rate=3091021/s
+add 16384/60500 (27.1%) elapsed=5ms rate=3189323/s
+add 20480/60500 (33.9%) elapsed=6ms rate=3249615/s
+add 24576/60500 (40.6%) elapsed=7ms rate=3318873/s
+add 28672/60500 (47.4%) elapsed=9ms rate=3291473/s
+add 32768/60500 (54.2%) elapsed=10ms rate=3226614/s
+add 36864/60500 (60.9%) elapsed=11ms rate=3257694/s
+add 40960/60500 (67.7%) elapsed=12ms rate=3325832/s
+add 45056/60500 (74.5%) elapsed=13ms rate=3385955/s
+add 49152/60500 (81.2%) elapsed=14ms rate=3459092/s
+add 53248/60500 (88.0%) elapsed=15ms rate=3531847/s
+add 57344/60500 (94.8%) elapsed=16ms rate=3591879/s
+add 60500/60500 (100.0%) elapsed=17ms rate=3637641/s
+added n=60500 slot=0 (primary) elapsed=17ms method=batch
+SAMPLE have=60500 memlock_B=10487488 max_entries=131072 loader_rss_kB=7008 or_rss_kB=8308 note=after_near_full
+
+### P1-a summary table
+| ports | map memlock B | max_entries | loader RSS | OR RSS | note |
+|-------|---------------|-------------|------------|--------|------|
+| baseline (have=3) | 10487488 | 131072 | 7008 kB | 8308 kB | few steered ports |
+| 30K (have=30001) | 10487488 | 131072 | 7008 kB | 8308 kB | fill 20ms; memlock≠RSS |
+| 60K (have=60001) | 10487488 | 131072 | 7008 kB | 8308 kB | fill 27ms; memlock≠RSS |
+| near-full(~60500, have=60500) | 10487488 | 131072 | 7008 kB | 8308 kB | fill 30ms; 100K unique N/A (u16) |
+
+Emphasize: **map bytes (memlock) ≠ process RSS** — kernel charges open_ports; loader/OR RSS stay nearly flat.
+
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| map-bytes-30k | have=30001 fill_ms=20 | 通过 |
+| map-bytes-60k | have=60001 fill_ms=27 | 通过 |
+| near-full | optional ≤u16 (~60500); 100K unique N/A | 通过 |
+| memlock-vs-rss | map memlock is kernel, ≠ process RSS | 通过 |
+| P1-a overall | BPF map bytes curve 30K/60K | 通过 |
+>>> P1-a => 通过 (rc=0)
+########## P1-b multi-worker / SO_REUSEPORT skew ##########
+=== P1-b multi-worker / SO_REUSEPORT skew ===
+nginx version: openresty/1.19.3.2
+Generated conf: /tmp/waf-p1b-reuseport-U0yE3F.conf
+--- conf listen / workers ---
+1:worker_processes 4;
+15:    lua_shared_dict waf_worker_hits 1m;
+24:        listen 127.0.0.1:8080 ssl https_allow_http reuseport;
+nginx: the configuration file /tmp/waf-p1b-test-NcGtNS.conf syntax is ok
+nginx: configuration file /tmp/waf-p1b-test-NcGtNS.conf test is successful
+certs already present: /workspace/waf-sklookup-demo/openresty/certs/demo.crt /workspace/waf-sklookup-demo/openresty/certs/demo.key (FORCE=1 to regenerate)
+Using nginx conf: /tmp/waf-p1b-reuseport-U0yE3F.conf
+nginx: the configuration file /tmp/waf-sklookup-m1/conf/nginx.conf syntax is ok
+nginx: configuration file /tmp/waf-sklookup-m1/conf/nginx.conf test is successful
+OpenResty started (local) nginx version: openresty/1.19.3.2 prefix=/tmp/waf-sklookup-m1/runtime config=/tmp/waf-sklookup-m1/conf/nginx.conf expose=off
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfel.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfel.go
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfeb.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfeb.go
+Loader PID 263980
+Run './run-openresty-demo.sh verify' to check steered HTTP/HTTPS ports.
+Default: X-Waf-External-Port is hidden. Restart with WAF_EXPOSE_EXTERNAL_PORT=1 to expose it.
+master=263747 worker_children=4
+LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=263751,fd=11),("openresty",pid=263747,fd=11))
+LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=263750,fd=10),("openresty",pid=263747,fd=10))
+LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=263749,fd=9),("openresty",pid=263747,fd=9))  
+LISTEN 0      511        127.0.0.1:8080       0.0.0.0:*    users:(("openresty",pid=263748,fd=8),("openresty",pid=263747,fd=8))  
+--- steered curl smoke ---
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+worker_id=3
+worker_pid=263751
+--- drive concurrent short traffic (5s, c=50) ---
+RESULT label=p1b-reuseport mode=short url=http://127.0.0.1:18081/ c=50 d=5s wall=5.336s ok=3347 fail=0 total=3347 rps=627.2 p50_us=55916 p90_us=192266 p99_us=310662 max_us=364317 bytes=404987
+--- worker-stats ---
+worker_id=0 hits=967
+worker_id=1 hits=888
+worker_id=2 hits=945
+worker_id=3 hits=947
+total=3747
+worker_count=4
+PARSED total=3747 workers_with_keys=4
+DIST w0=967 w1=888 w2=945 w3=947
+max=967 min=888 max_pct=25.8
+RESULT=通过
+REASON=distribution acceptable (max_pct=25.8 idle=0)
+listen_lines_8080=4 worker_children=4
+Restored OPENRESTY_NGINX_CONF to default (worker_processes 1); demo stopped.
+
+### P1-b summary table
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| conf-4-reuseport | worker_processes=4 listen reuseport nginx -t | 通过 |
+| steered-smoke | curl steered :18081 under 4 workers | 通过 |
+| worker-dist | distribution acceptable (max_pct=25.8 idle=0) | 通过 |
+| restore-wp1 | OPENRESTY_NGINX_CONF restored to single-worker default | 通过 |
+| P1-b overall | multi-worker reuseport skew | 通过 |
+>>> P1-b => 通过 (rc=0)
+########## P1-c $waf_external_port ACL/log/limit true path ##########
+=== P1-c $waf_external_port true path (ACL / log / limit) ===
+nginx version: openresty/1.19.3.2
+Generated conf: /tmp/waf-p1c-wafport-5VndKq.conf (deny=19999 rate=8/2s)
+certs already present: /workspace/waf-sklookup-demo/openresty/certs/demo.crt /workspace/waf-sklookup-demo/openresty/certs/demo.key (FORCE=1 to regenerate)
+Using nginx conf: /tmp/waf-p1c-wafport-5VndKq.conf
+nginx: the configuration file /tmp/waf-sklookup-m1/conf/nginx.conf syntax is ok
+nginx: configuration file /tmp/waf-sklookup-m1/conf/nginx.conf test is successful
+OpenResty started (local) nginx version: openresty/1.19.3.2 prefix=/tmp/waf-sklookup-m1/runtime config=/tmp/waf-sklookup-m1/conf/nginx.conf expose=off
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfel.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfel.go
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfeb.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfeb.go
+Loader PID 264777
+Run './run-openresty-demo.sh verify' to check steered HTTP/HTTPS ports.
+Default: X-Waf-External-Port is hidden. Restart with WAF_EXPOSE_EXTERNAL_PORT=1 to expose it.
+add 1/1 (100.0%) elapsed=0s rate=57807/s
+opened steered port 19999 → redir_socket[0]
+--- (1) steered port A=18081 → expect 200 + waf_external_port=A ---
+HTTP/1.1 200 OK
+Server: openresty/1.19.3.2
+Date: Thu, 13 Aug 2026 00:37:38 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+Connection: keep-alive
+
+
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+host=wrong-host.example
+A_OK=通过 LOG_A=通过
+--- (2) deny port 19999 → expect 403 ---
+http_code=403 rc=0
+denied waf_external_port=19999
+DENY_OK=通过
+--- (3) burst on port A hits limit; port B still OK (same Host) ---
+burst A: ok200=8 limited503=12
+port B code=200
+OpenResty M1 OK
+waf_external_port=18082
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+host=same-host.example
+LIMIT_OK=通过
+--- access_log tail ---
+127.0.0.1:48248 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:48254 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:48264 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:48266 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:48276 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:48282 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:48286 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=200
+127.0.0.1:48294 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48310 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48324 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48334 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48340 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48352 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48354 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48370 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48382 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48386 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48392 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:48408 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18081 status=503
+127.0.0.1:55468 GET / HTTP/1.1 scheme=http internal_port=8080 waf_external_port=18082 status=200
+
+### P1-c summary table
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| port-A-body | curl :18081 Host=wrong → waf_external_port=18081 | 通过 |
+| port-A-access-log | access_log waf_external_port=18081 | 通过 |
+| acl-deny | curl :19999 → 403 | 通过 |
+| limit-by-ext-port | burst A→503 (12x) while B→200 same Host | 通过 |
+| P1-c overall | $waf_external_port ACL/log/limit true path | 通过 |
+>>> P1-c => 通过 (rc=0)
+########## P1-d rollback drill unload/restore (+ PROXY N/A) ##########
+=== P1-d rollback drill (unload sk_lookup / restore) ===
+nginx version: openresty/1.19.3.2
+PROXY path: N/A/阻塞(无实现) (observation path = direct internal :8080)
+certs already present: /workspace/waf-sklookup-demo/openresty/certs/demo.crt /workspace/waf-sklookup-demo/openresty/certs/demo.key (FORCE=1 to regenerate)
+Using nginx conf: openresty/nginx.tengine-https-allow-http.conf.example
+nginx: the configuration file /tmp/waf-sklookup-m1/conf/nginx.conf syntax is ok
+nginx: configuration file /tmp/waf-sklookup-m1/conf/nginx.conf test is successful
+OpenResty started (local) nginx version: openresty/1.19.3.2 prefix=/tmp/waf-sklookup-m1/runtime config=/tmp/waf-sklookup-m1/conf/nginx.conf expose=off
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfel.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfel.go
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfeb.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfeb.go
+Loader PID 265181
+Run './run-openresty-demo.sh verify' to check steered HTTP/HTTPS ports.
+Default: X-Waf-External-Port is hidden. Restart with WAF_EXPOSE_EXTERNAL_PORT=1 to expose it.
+--- (1) baseline steered curl 200 ---
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+BASE_OK=通过
+--- (2) timed unload: stop loader / detach sk_lookup (keep OpenResty up) ---
+unload_elapsed_s=0.114 (114ms)
+--- (3) verify steered FAIL; direct :8080 still works ---
+steered curl_rc=7 http_code=000
+curl: (7) Failed to connect to 127.0.0.1 port 18081 after 0 ms: Could not connect to server
+STEER_FAIL_OK=通过 (steered failed as expected (rc=7 code=000))
+OpenResty M1 OK
+waf_external_port=8080
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+DIRECT_OK=通过 (old path = direct internal listen)
+--- (4) timed restore: start loader again ---
+restore_elapsed_s=0.26 (260ms) ready=1
+--- (5) verify steered recover ---
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+OpenResty M1 OK
+waf_external_port=18081
+server_port=8080
+scheme=https
+remote_addr=127.0.0.1
+RECOVER_OK=通过 RECOVER_HTTPS=通过
+
+### P1-d steps / timing
+| step | elapsed_s | verification |
+|------|-----------|--------------|
+| unload loader+unpin | 0.114 | kill loader.pid; rm pin; bpftool |
+| steered fail check | — | curl http://127.0.0.1:18081/ → fail (rc=7 code=000) |
+| direct internal OK | — | curl http://127.0.0.1:8080/ → 200 |
+| restore loader | 0.26 | waf-sklookup-demo -mode openresty; wait READY |
+| steered recover | — | curl http+https://127.0.0.1:18081/ → 200 |
+
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| baseline | steered curl 200 before unload | 通过 |
+| unload | stop loader/detach in 0.114s | 通过 |
+| steered-fail | steered failed as expected (rc=7 code=000) | 通过 |
+| direct-8080 | direct internal listen still 200 (rollback observation path) | 通过 |
+| restore | loader re-attach in 0.26s ready=1 | 通过 |
+| recover-http | steered HTTP after restore | 通过 |
+| recover-https | steered HTTPS after restore | 通过 |
+| PROXY-fallback | PROXY rollback path | N/A/阻塞(无实现) |
+| P1-d overall | rollback drill unload/restore | 通过 |
+>>> P1-d => 通过 (rc=0)
