@@ -11,6 +11,7 @@ OPENRESTY_PREFIX="${OPENRESTY_PREFIX:-}"
 LOADER_PORTS="${LOADER_PORTS:-18081,18082,65500}"
 # Stock-compat fallback only (not the Tengine product model). Empty to skip.
 LOADER_TLS_PORTS="${LOADER_TLS_PORTS-18443}"  # empty string skips TLS fallback ports
+PORTS_FILE="${PORTS_FILE:-ports.conf}"
 TARGET="${TARGET:-127.0.0.1:8080}"
 TLS_TARGET="${TLS_TARGET:-127.0.0.1:8443}"
 WAIT="${WAIT:-60s}"
@@ -21,7 +22,7 @@ LOADER_BIN="${LOADER_BIN:-./rust/loader/target/release/waf-sklookup-loader}"
 
 usage() {
   cat <<EOF
-Usage: $0 [start|stop|verify|add PORT|remove PORT|list|load-ports ...|bulk ...|fill COUNT|close-port PORT|open-port PORT|dump-ports|certs]
+Usage: $0 [start|stop|verify|add PORT|remove PORT|list|reconcile|load-ports ...|bulk ...|fill COUNT|close-port PORT|open-port PORT|dump-ports|certs]
 
   start              Build loader, start OpenResty, attach sk_lookup
   stop               Stop loader + OpenResty started by this script
@@ -29,6 +30,7 @@ Usage: $0 [start|stop|verify|add PORT|remove PORT|list|load-ports ...|bulk ...|f
   add PORT [...]     M2: insert port(s) or START-END into pinned open_ports (no reload)
   remove PORT [...]  M2: delete port(s) from pinned open_ports (no reload)
   list               M2: list steered ports currently in the pinned map
+  reconcile          Apply PORTS_FILE as the complete open_ports desired state
   load-ports         M2/M3: bulk open via -range / -file / -stdin (no OpenResty reload)
   close-ports        M2/M3: bulk close via -range / -file / -stdin
   bulk open|close|fill
@@ -43,6 +45,7 @@ Environment:
   OPENRESTY_PREFIX           Local OpenResty prefix (else docker-compose, else PATH)
   LOADER_PORTS               Steered HTTP/primary ports (default: 18081,18082,65500)
   LOADER_TLS_PORTS           STOCK FALLBACK steered TLS ports (default: 18443; empty to skip)
+  PORTS_FILE                 Desired-state file (default: ports.conf)
   TARGET                     Primary internal listen (default: 127.0.0.1:8080)
   TLS_TARGET                 STOCK FALLBACK TLS listen (default: 127.0.0.1:8443)
   WAIT                       Loader wait for OpenResty listen (default: 60s)
@@ -159,6 +162,7 @@ start_loader() {
     -mode openresty \
     -target "$TARGET" \
     -ports "$LOADER_PORTS" \
+    -ports-file "$PORTS_FILE" \
     "${tls_args[@]}" \
     -wait "$WAIT" \
     -pin-dir "$PIN_DIR" \
@@ -345,7 +349,8 @@ cmd_stop() {
   mkdir -p "$(state_dir)"
   : > "$(state_dir)/stop-in-progress"
   if [[ -x "$LOADER_BIN" ]]; then
-    sudo "$LOADER_BIN" bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
+    # Close the live map without rewriting ports.conf (file stays source of truth).
+    sudo "$LOADER_BIN" bulk close -range 1-65535 -pin-dir "$PIN_DIR" -no-file >/dev/null 2>&1 || true
   fi
   stop_loader
   stop_openresty
@@ -458,12 +463,12 @@ ensure_loader_bin() {
 
 cmd_add() {
   ensure_loader_bin
-  sudo "$LOADER_BIN" add -pin-dir "$PIN_DIR" "$@"
+  sudo "$LOADER_BIN" add -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" "$@"
 }
 
 cmd_remove() {
   ensure_loader_bin
-  sudo "$LOADER_BIN" remove -pin-dir "$PIN_DIR" "$@"
+  sudo "$LOADER_BIN" remove -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" "$@"
 }
 
 cmd_list() {
@@ -479,7 +484,7 @@ cmd_bulk() {
   fi
   shift
   ensure_loader_bin
-  sudo "$LOADER_BIN" bulk "$sub" -pin-dir "$PIN_DIR" "$@"
+  sudo "$LOADER_BIN" bulk "$sub" -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" "$@"
 }
 
 cmd_fill() {
@@ -496,7 +501,13 @@ cmd_fill() {
     exit 2
   fi
   ensure_loader_bin
-  sudo "$LOADER_BIN" bulk fill -count "$count" -start "$start" -pin-dir "$PIN_DIR"
+  # Test helper: overlay the live map; do not rewrite the desired-state file.
+  sudo "$LOADER_BIN" bulk fill -count "$count" -start "$start" -pin-dir "$PIN_DIR" -no-file
+}
+
+cmd_reconcile() {
+  ensure_loader_bin
+  sudo "$LOADER_BIN" reconcile -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" "$@"
 }
 
 cmd_close_port() {
@@ -544,6 +555,7 @@ case "$1" in
   add) shift; cmd_add "$@" ;;
   remove) shift; cmd_remove "$@" ;;
   list) shift; cmd_list "$@" ;;
+  reconcile|apply) shift; cmd_reconcile "$@" ;;
   load-ports) shift; cmd_bulk open "$@" ;;
   close-ports) shift; cmd_bulk close "$@" ;;
   bulk) shift; cmd_bulk "$@" ;;

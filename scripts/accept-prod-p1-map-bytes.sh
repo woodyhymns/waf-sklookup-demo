@@ -119,7 +119,7 @@ fi
 for count in "${TIERS[@]}"; do
   echo "--- bulk fill ${count} ---"
   T0=$(date +%s%N)
-  sudo "$LOADER_BIN" bulk fill -count "$count" -start "$FILL_START" -pin-dir "$PIN_DIR"
+  sudo "$LOADER_BIN" bulk fill -count "$count" -start "$FILL_START" -pin-dir "$PIN_DIR" -no-file
   T1=$(date +%s%N)
   FILL_MS=$(( (T1 - T0) / 1000000 ))
   sample "after_bulk_${count}"
@@ -127,7 +127,7 @@ for count in "${TIERS[@]}"; do
   ROWS+=("| ${count} (have=${LAST_HAVE}) | ${LAST_MEMLOCK} | ${LAST_MAXE} | ${LAST_LRSS} kB | ${LAST_ORRSS} kB | fill ${FILL_MS}ms; memlock≠RSS |")
   mark_row "map-bytes-${count}" "have=${LAST_HAVE} fill_ms=${FILL_MS}" "$([[ ${LAST_HAVE:-0} -ge $count ]] && echo 通过 || echo 失败)"
   # Each tier is independent; never accumulate fills into the next tier.
-  sudo "$LOADER_BIN" bulk close -range "${FILL_START}-$((FILL_START + count - 1))" -pin-dir "$PIN_DIR" >/dev/null
+  sudo "$LOADER_BIN" bulk close -range "${FILL_START}-$((FILL_START + count - 1))" -pin-dir "$PIN_DIR" -no-file >/dev/null
 done
 
 NEAR_FULL_STATUS="skip"
@@ -138,7 +138,7 @@ if [[ "${M3_FULL_LADDER:-0}" == "1" && "${P1A_NEAR_FULL:-0}" == "1" && "$NEAR_CO
   echo "--- optional near-full fill count=${NEAR_COUNT} (100K unique N/A: u16 keys) ---"
   T4=$(date +%s%N)
   set +e
-  sudo "$LOADER_BIN" bulk fill -count "$NEAR_COUNT" -start "$FILL_START" -pin-dir "$PIN_DIR"
+  sudo "$LOADER_BIN" bulk fill -count "$NEAR_COUNT" -start "$FILL_START" -pin-dir "$PIN_DIR" -no-file
   FRC=$?
   set -e
   T5=$(date +%s%N)
@@ -151,7 +151,7 @@ if [[ "${M3_FULL_LADDER:-0}" == "1" && "${P1A_NEAR_FULL:-0}" == "1" && "$NEAR_CO
     ROWS+=("| near-full | — | — | — | — | skipped/failed rc=$FRC ms=$FILLN_MS |")
     NEAR_FULL_STATUS="skip"
   fi
-  sudo "$LOADER_BIN" bulk close -range "${FILL_START}-$((FILL_START + NEAR_COUNT - 1))" -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
+  sudo "$LOADER_BIN" bulk close -range "${FILL_START}-$((FILL_START + NEAR_COUNT - 1))" -pin-dir "$PIN_DIR" -no-file >/dev/null 2>&1 || true
 else
   ROWS+=("| near-full | — | — | — | — | skip optional |")
 fi

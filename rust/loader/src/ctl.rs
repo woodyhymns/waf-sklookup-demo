@@ -11,6 +11,7 @@ use crate::bulk::{
     load_pinned_open_ports,
 };
 use crate::cli::{parse_go_flags, ParsedFlags};
+use crate::desired::{self, DesiredPorts};
 use crate::pin::{self, DEFAULT_BULK_BATCH, DEFAULT_PIN_DIR, REDIR_PRIMARY, REDIR_TLS};
 use crate::ports::{self, collect_bulk_ports, generate_fill_ports, parse_skip_set};
 
@@ -25,6 +26,10 @@ M2 control plane (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-loader bulk open  -range START-END    # 30K/60K open
   sudo ./waf-sklookup-loader bulk close -range START-END    # 30K/60K close
   sudo ./waf-sklookup-loader bulk fill -count 30000 [-start 5000]
+  sudo ./waf-sklookup-loader reconcile|apply [-ports-file ports.conf]
+
+Mutating commands update the desired file (default ports.conf) and the pinned map.
+  Pass -no-file to edit the live map only (test/hygiene overlay; next reconcile restores the file).
 
 M3 Test: M3_FULL_LADDER=1 ./scripts/m3-fill-ports.sh 30000
 ";
@@ -40,6 +45,7 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
         "load-ports" => ctl_bulk_add(&args[1..]),
         "close-ports" => ctl_bulk_remove(&args[1..]),
         "bulk" => ctl_bulk(&args[1..]),
+        "reconcile" | "apply" => ctl_reconcile(&args[1..]),
         "help" => {
             eprint!("{CTL_USAGE}");
             Ok(())
@@ -60,6 +66,10 @@ fn pin_dir_of(flags: &ParsedFlags) -> PathBuf {
     PathBuf::from(flags.get("pin-dir").unwrap_or(DEFAULT_PIN_DIR))
 }
 
+fn ports_file_of(flags: &ParsedFlags) -> PathBuf {
+    PathBuf::from(flags.get("ports-file").unwrap_or("ports.conf"))
+}
+
 fn maybe_help(flags: &ParsedFlags) -> bool {
     flags.bool_flag("help")
 }
@@ -67,8 +77,8 @@ fn maybe_help(flags: &ParsedFlags) -> bool {
 fn ctl_add(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
-        &["tls", "stdin", "help"],
-        &["pin-dir", "range", "file"],
+        &["tls", "stdin", "help", "no-file"],
+        &["pin-dir", "ports-file", "range", "file"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -89,16 +99,22 @@ fn ctl_add(args: &[String]) -> Result<()> {
     };
     apply_add(
         &pin_dir_of(&flags),
+        &ports_file_of(&flags),
         &ports,
         ctl_slot(flags.bool_flag("tls")),
         DEFAULT_BULK_BATCH,
         true,
         ports.len() > 32,
+        !flags.bool_flag("no-file"),
     )
 }
 
 fn ctl_remove(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["stdin", "help"], &["pin-dir", "range", "file"])?;
+    let flags = parse_go_flags(
+        args,
+        &["stdin", "help", "no-file"],
+        &["pin-dir", "ports-file", "range", "file"],
+    )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
         return Ok(());
@@ -118,10 +134,12 @@ fn ctl_remove(args: &[String]) -> Result<()> {
     };
     apply_remove(
         &pin_dir_of(&flags),
+        &ports_file_of(&flags),
         &ports,
         DEFAULT_BULK_BATCH,
         true,
         ports.len() > 32,
+        !flags.bool_flag("no-file"),
     )
 }
 
@@ -149,8 +167,8 @@ fn ctl_bulk(args: &[String]) -> Result<()> {
 fn ctl_bulk_add(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
-        &["tls", "stdin", "quiet", "help"],
-        &["pin-dir", "range", "file", "batch"],
+        &["tls", "stdin", "quiet", "help", "no-file"],
+        &["pin-dir", "ports-file", "range", "file", "batch"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -160,19 +178,21 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
     let batch = parse_batch(flags.get("batch"))?;
     apply_add(
         &pin_dir_of(&flags),
+        &ports_file_of(&flags),
         &ports,
         ctl_slot(flags.bool_flag("tls")),
         batch,
         !flags.bool_flag("quiet"),
         true,
+        !flags.bool_flag("no-file"),
     )
 }
 
 fn ctl_bulk_remove(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
-        &["stdin", "quiet", "help"],
-        &["pin-dir", "range", "file", "batch"],
+        &["stdin", "quiet", "help", "no-file"],
+        &["pin-dir", "ports-file", "range", "file", "batch"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -182,18 +202,20 @@ fn ctl_bulk_remove(args: &[String]) -> Result<()> {
     let batch = parse_batch(flags.get("batch"))?;
     apply_remove(
         &pin_dir_of(&flags),
+        &ports_file_of(&flags),
         &ports,
         batch,
         !flags.bool_flag("quiet"),
         true,
+        !flags.bool_flag("no-file"),
     )
 }
 
 fn ctl_bulk_fill(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
-        &["tls", "quiet", "help"],
-        &["pin-dir", "count", "start", "skip", "batch"],
+        &["tls", "quiet", "help", "no-file"],
+        &["pin-dir", "ports-file", "count", "start", "skip", "batch"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -223,11 +245,13 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
     );
     apply_add(
         &pin,
+        &ports_file_of(&flags),
         &ports,
         ctl_slot(flags.bool_flag("tls")),
         batch,
         !flags.bool_flag("quiet"),
         true,
+        !flags.bool_flag("no-file"),
     )
 }
 
@@ -249,13 +273,22 @@ fn collect_from_flags(flags: &ParsedFlags) -> Result<Vec<u16>> {
 
 fn apply_add(
     pin_dir: &Path,
+    ports_file: &Path,
     ports: &[u16],
     slot: u8,
     batch: usize,
     progress: bool,
     summary: bool,
+    sync_file: bool,
 ) -> Result<()> {
     let m = load_pinned_open_ports(pin_dir)?;
+    if sync_file {
+        let mut desired = desired_or_current(ports_file, &m)?;
+        for port in ports {
+            desired.insert(*port, slot);
+        }
+        desired::write(ports_file, &desired)?;
+    }
     let mut stderr = io::stderr();
     let mut prog: Option<&mut dyn Write> = if progress { Some(&mut stderr) } else { None };
     let res = bulk_put_ports(&m, ports, slot, batch, prog.as_deref_mut())?;
@@ -276,12 +309,21 @@ fn apply_add(
 
 fn apply_remove(
     pin_dir: &Path,
+    ports_file: &Path,
     ports: &[u16],
     batch: usize,
     progress: bool,
     summary: bool,
+    sync_file: bool,
 ) -> Result<()> {
     let m = load_pinned_open_ports(pin_dir)?;
+    if sync_file {
+        let mut desired = desired_or_current(ports_file, &m)?;
+        for port in ports {
+            desired.remove(port);
+        }
+        desired::write(ports_file, &desired)?;
+    }
     let mut stderr = io::stderr();
     let mut prog: Option<&mut dyn Write> = if progress { Some(&mut stderr) } else { None };
     let res = bulk_delete_ports(&m, ports, batch, prog.as_deref_mut())?;
@@ -335,11 +377,16 @@ fn port_from_key(key: &[u8]) -> u16 {
     }
 }
 
-pub fn close_pinned_ports(pin_dir: &Path, ports: &[u16]) -> Result<()> {
-    apply_remove(pin_dir, ports, DEFAULT_BULK_BATCH, false, false)
+pub fn close_pinned_ports(pin_dir: &Path, ports_file: &Path, ports: &[u16]) -> Result<()> {
+    apply_remove(pin_dir, ports_file, ports, DEFAULT_BULK_BATCH, false, false, true)
 }
 
-pub fn open_pinned_ports(pin_dir: &Path, http_ports: &[u16], tls_ports: &[u16]) -> Result<()> {
+pub fn open_pinned_ports(
+    pin_dir: &Path,
+    ports_file: &Path,
+    http_ports: &[u16],
+    tls_ports: &[u16],
+) -> Result<()> {
     let overlap = ports::port_set_overlap(http_ports, tls_ports);
     if !overlap.is_empty() {
         bail!("port listed in both -ports and -tls-ports: {overlap:?}");
@@ -347,23 +394,83 @@ pub fn open_pinned_ports(pin_dir: &Path, http_ports: &[u16], tls_ports: &[u16]) 
     if !http_ports.is_empty() {
         apply_add(
             pin_dir,
+            ports_file,
             http_ports,
             REDIR_PRIMARY as u8,
             DEFAULT_BULK_BATCH,
             false,
             false,
+            true,
         )?;
     }
     if !tls_ports.is_empty() {
         apply_add(
             pin_dir,
+            ports_file,
             tls_ports,
             REDIR_TLS as u8,
             DEFAULT_BULK_BATCH,
             false,
             false,
+            true,
         )?;
     }
+    Ok(())
+}
+
+fn desired_or_current(path: &Path, map: &impl MapCore) -> Result<DesiredPorts> {
+    if path.exists() {
+        desired::load(path)
+    } else {
+        Ok(desired::read_map(map)?.into_iter().collect())
+    }
+}
+
+fn ctl_reconcile(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["quiet", "help"], &["pin-dir", "ports-file", "batch"])?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
+    let desired = desired::load(&ports_file_of(&flags))?;
+    let map = load_pinned_open_ports(&pin_dir_of(&flags))?;
+    let plan = desired::plan(&desired, &desired::read_map(&map)?);
+    let batch = parse_batch(flags.get("batch"))?;
+    let mut stderr = io::stderr();
+    let progress = !flags.bool_flag("quiet");
+    if !plan.put_primary.is_empty() {
+        bulk_put_ports(
+            &map,
+            &plan.put_primary,
+            REDIR_PRIMARY as u8,
+            batch,
+            if progress { Some(&mut stderr) } else { None },
+        )?;
+    }
+    if !plan.put_tls.is_empty() {
+        bulk_put_ports(
+            &map,
+            &plan.put_tls,
+            REDIR_TLS as u8,
+            batch,
+            if progress { Some(&mut stderr) } else { None },
+        )?;
+    }
+    if !plan.delete.is_empty() {
+        bulk_delete_ports(
+            &map,
+            &plan.delete,
+            batch,
+            if progress { Some(&mut stderr) } else { None },
+        )?;
+    }
+    println!(
+        "reconciled desired={} put={} delete={} file={}",
+        desired.len(),
+        plan.put_primary.len() + plan.put_tls.len(),
+        plan.delete.len(),
+        ports_file_of(&flags).display()
+    );
     Ok(())
 }
 

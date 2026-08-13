@@ -32,5 +32,5 @@ if [[ ! -x "$LOADER_BIN" ]]; then
 fi
 
 echo "M3 fill: count=$COUNT start=$START pin=$PIN_DIR loader=$LOADER_BIN (no OpenResty reload)"
-sudo "$LOADER_BIN" bulk fill -count "$COUNT" -start "$START" -pin-dir "$PIN_DIR"
+sudo "$LOADER_BIN" bulk fill -count "$COUNT" -start "$START" -pin-dir "$PIN_DIR" -no-file
 sudo "$LOADER_BIN" list -count -pin-dir "$PIN_DIR"

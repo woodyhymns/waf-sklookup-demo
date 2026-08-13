@@ -94,12 +94,15 @@ Client → :18081 / :18082 / :65500  ──sk_lookup──►  fixed internal li
 
 ## M2: port control plane
 
-While the loader is up (maps pinned), a second invocation of the same Rust binary edits `open_ports`. OpenResty is not reloaded; the BPF program is not re-attached.
+`ports.conf` at the repository root is the source of truth for `open_ports`. Each non-comment line is a port, comma list, or `START-END`; append `tls` to select the stock TLS-fallback slot (for example, `18443 tls`). Blank lines and `#` comments are ignored. Override the path with `-ports-file PATH` (or `PORTS_FILE` in the demo wrapper).
+
+At startup the loader reconciles the map exactly to this file. If the file is missing, `-ports`/`-tls-ports` remain backward-compatible inputs and seed it. While the loader is up (maps pinned), `reconcile`/`apply` re-reads the file without reloading OpenResty or re-attaching `sk_lookup`; sending the loader `SIGHUP` does the same. Add/remove/bulk commands rewrite the desired file as well as updating the live map. Pass `-no-file` to overlay the live map only (stop/hygiene and M3 fill helpers do this so they cannot empty `ports.conf`).
 
 ```bash
 sudo ./rust/loader/target/release/waf-sklookup-loader add 18083
 sudo ./rust/loader/target/release/waf-sklookup-loader remove 18083
 sudo ./rust/loader/target/release/waf-sklookup-loader list
+sudo ./rust/loader/target/release/waf-sklookup-loader reconcile
 sudo ./rust/loader/target/release/waf-sklookup-loader bulk open  -range 5000-34999
 sudo ./rust/loader/target/release/waf-sklookup-loader bulk close -range 5000-34999
 M3_FULL_LADDER=1 sudo ./rust/loader/target/release/waf-sklookup-loader bulk fill -count 30000 -start 5000

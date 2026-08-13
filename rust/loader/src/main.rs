@@ -4,6 +4,7 @@
 mod bulk;
 mod cli;
 mod ctl;
+mod desired;
 mod listen_fd;
 mod load;
 mod openresty;
@@ -89,13 +90,13 @@ fn run_map_edit(args: LongRunningArgs) -> Result<()> {
             }
             let mut all = http_ports;
             all.extend(tls_ports);
-            ctl::close_pinned_ports(&args.pin_dir, &all)
+            ctl::close_pinned_ports(&args.pin_dir, &args.ports_file, &all)
         }
         RunMode::OpenPort => {
             if http_ports.is_empty() && tls_ports.is_empty() {
                 bail!("open-port needs -ports and/or -tls-ports");
             }
-            ctl::open_pinned_ports(&args.pin_dir, &http_ports, &tls_ports)
+            ctl::open_pinned_ports(&args.pin_dir, &args.ports_file, &http_ports, &tls_ports)
         }
         RunMode::DumpPorts => ctl::dump_pinned_ports(&args.pin_dir),
         RunMode::Toy | RunMode::OpenResty => {
@@ -123,14 +124,34 @@ fn map_edit_port_lists(args: &LongRunningArgs) -> Result<(Vec<u16>, Vec<u16>)> {
 fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs) -> Result<()> {
     let (mut skel, _link) = load::load_and_attach(open_object)?;
 
-    let steered = ports::parse_port_list_allow_empty(&args.ports_raw)
-        .map_err(|e| anyhow::anyhow!("bad -ports: {e:#}"))?;
-    let tls_ports = ports::parse_port_list_allow_empty(&args.tls_ports_raw)
-        .map_err(|e| anyhow::anyhow!("bad -tls-ports: {e:#}"))?;
-    let overlap = ports::port_set_overlap(&steered, &tls_ports);
-    if !overlap.is_empty() {
-        bail!("port listed in both -ports and -tls-ports: {overlap:?}");
-    }
+    let desired = if args.ports_file.exists() {
+        let state = desired::load(&args.ports_file)?;
+        log_msg(format_args!(
+            "loaded desired ports from {}",
+            args.ports_file.display()
+        ));
+        state
+    } else {
+        let steered = ports::parse_port_list_allow_empty(&args.ports_raw)
+            .map_err(|e| anyhow::anyhow!("bad -ports: {e:#}"))?;
+        let tls = ports::parse_port_list_allow_empty(&args.tls_ports_raw)
+            .map_err(|e| anyhow::anyhow!("bad -tls-ports: {e:#}"))?;
+        let state = desired::from_lists(&steered, &tls)?;
+        desired::write(&args.ports_file, &state)?;
+        log_msg(format_args!(
+            "seeded missing desired ports file {} from -ports/-tls-ports",
+            args.ports_file.display()
+        ));
+        state
+    };
+    let steered: Vec<u16> = desired
+        .iter()
+        .filter_map(|(p, s)| (*s == pin::REDIR_PRIMARY as u8).then_some(*p))
+        .collect();
+    let tls_ports: Vec<u16> = desired
+        .iter()
+        .filter_map(|(p, s)| (*s == pin::REDIR_TLS as u8).then_some(*p))
+        .collect();
 
     let pin_fatal = matches!(args.mode, RunMode::OpenResty);
     let pinned = load::pin_or_warn(&mut skel, &args.pin_dir, pin_fatal)?;
@@ -141,28 +162,36 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
     });
 
     let shutdown = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&shutdown);
-    ctrlc::set_handler(move || {
-        flag.store(true, Ordering::SeqCst);
-    })?;
+    let reload = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
+    signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
+    signal_hook::flag::register(signal_hook::consts::SIGQUIT, Arc::clone(&shutdown))?;
+    signal_hook::flag::register(signal_hook::consts::SIGHUP, Arc::clone(&reload))?;
 
     // Hold listen FDs so SOCKMAP entries stay valid (same as Go keeping *os.File).
     let mut _held_fds = Vec::new();
     match args.mode {
         RunMode::Toy => {
-            if steered.is_empty() {
-                bail!("toy mode needs -ports");
-            }
-            if !tls_ports.is_empty() {
-                bail!("toy mode does not use -tls-ports (HTTP only)");
-            }
             let fd = toy::run_toy_mode(&skel, &args.listen, &steered, &shutdown)?;
+            if !tls_ports.is_empty() {
+                use std::os::fd::AsRawFd;
+                load::register_listen_fd(
+                    &skel.maps.redir_socket,
+                    fd.as_raw_fd(),
+                    pin::REDIR_TLS,
+                )?;
+                load::open_steered_ports(
+                    &skel.maps.open_ports,
+                    &tls_ports,
+                    pin::REDIR_TLS as u8,
+                )?;
+                log_msg(format_args!(
+                    "toy mode maps desired `tls` entries to its HTTP socket"
+                ));
+            }
             _held_fds.push(fd);
         }
         RunMode::OpenResty => {
-            if steered.is_empty() && tls_ports.is_empty() {
-                bail!("openresty mode needs -ports and/or -tls-ports");
-            }
             let fds = openresty::run_openresty_mode(
                 &skel,
                 &args.target,
@@ -179,7 +208,28 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         }
     }
 
+    let initial = desired::reconcile_map(&skel.maps.open_ports, &desired)?;
+    log_msg(format_args!(
+        "desired-state reconcile: put={} delete={} file={}",
+        initial.put_primary.len() + initial.put_tls.len(),
+        initial.delete.len(),
+        args.ports_file.display()
+    ));
+
     while !shutdown.load(Ordering::SeqCst) {
+        if reload.swap(false, Ordering::SeqCst) {
+            match desired::load(&args.ports_file)
+                .and_then(|state| desired::reconcile_map(&skel.maps.open_ports, &state))
+            {
+                Ok(plan) => log_msg(format_args!(
+                    "SIGHUP reconcile: put={} delete={} file={}",
+                    plan.put_primary.len() + plan.put_tls.len(),
+                    plan.delete.len(),
+                    args.ports_file.display()
+                )),
+                Err(err) => log_msg(format_args!("SIGHUP reconcile failed: {err:#}")),
+            }
+        }
         thread::sleep(Duration::from_millis(200));
     }
     if matches!(args.mode, RunMode::OpenResty) {
