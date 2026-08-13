@@ -163,6 +163,32 @@ HTTPS B: 4280, 4486, 4409, 5051, 4627 → med 4486
 
 ---
 
+## 2.1 Test measurement handoff (2026-08-13)
+
+Source: Test agent · same evidence tip · **Hold merge**. No full G2+G6 re-fire.
+
+**Commands / ports** — confirmed identical to §1:
+
+- A: `http(s)://127.0.0.1:8080/` · B: `http(s)://127.0.0.1:18081/`
+- `OPENRESTY_PREFIX=/usr/local/openresty-hah` · tengine HAH conf · `LOADER_TLS_PORTS=""`
+- keepalive · warmup=3s · d=20s · c=8 · N=5 · one-shot `./scripts/accept-prod-g2-latency.sh`
+
+**Median math** — confirmed: N=5 odd → middle after sort (`median_of`); HTTP 9334/12038 → **1.2897**.
+
+| Measurement bias item | Test status |
+|-----------------------|-------------|
+| Pure ABAB order artifact | **Partially excluded** — block-order still Fail |
+| Seconds-scale noise / abs gate | **Excluded** as sole cause (abs≈2.7ms Pass) |
+| Missing warmup | **Excluded** (warmup=3s) |
+| Same-box CPU contention / thermal | **Open** — A-http p99 drifts 5.9→11.3ms within block |
+| Rel gate sensitive on ~9ms baseline (2–3ms → ratio>1.05) | **Noted** — explain Fail shape; **do not raise RATIO_MAX** |
+| CPU pin / isolated cores | **Not yet run** |
+| keepalive vs short / B→A / c=1 | **In progress** (Test light probes) |
+
+Path ownership: measurement bias → Test; path hypotheses (H7 Lua `/proc` etc.) → this pack / Repo.
+
+---
+
 ## 3. Recommended next moves
 
 ### 3.1 Prefer **measurement** first (Test) — no gate change
