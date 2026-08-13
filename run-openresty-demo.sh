@@ -163,17 +163,20 @@ start_loader() {
     -wait "$WAIT" \
     -pin-dir "$PIN_DIR" \
     >"$(state_dir)/loader.log" 2>&1 &
-  echo $! > "$(state_dir)/loader.pid"
+  local pid=$!
+  echo "$pid" > "$(state_dir)/loader.pid"
   local i
   for i in $(seq 1 40); do
-    if grep -q "OPENRESTY P1 READY" "$(state_dir)/loader.log" 2>/dev/null; then
-      echo "Loader PID $(cat "$(state_dir)/loader.pid")"
-      return 0
-    fi
-    if ! kill -0 "$(cat "$(state_dir)/loader.pid")" 2>/dev/null; then
+    # The sudo-launched loader may be owned by root, so an unprivileged
+    # kill -0 can report EPERM even though it is alive.
+    if [[ ! -d "/proc/$pid" ]]; then
       echo "Loader exited early:" >&2
       cat "$(state_dir)/loader.log" >&2 || true
       exit 1
+    fi
+    if grep -q "OPENRESTY P1 READY" "$(state_dir)/loader.log" 2>/dev/null; then
+      echo "Loader PID $pid"
+      return 0
     fi
     sleep 0.5
   done
@@ -188,13 +191,13 @@ stop_loader() {
     rm -f "$(state_dir)/loader.pid"
   fi
   # loader.pid historically contained the sudo wrapper. Linux comm is 15 chars,
-  # so pkill -x cannot match waf-sklookup-demo / waf-sklookup-loader. Match the
-  # binary as a cmdline path component (not the repo directory name).
-  sudo pkill -TERM -f '(^|[ /])waf-sklookup-demo( |$)' 2>/dev/null || true
-  sudo pkill -TERM -f '(^|[ /])waf-sklookup-loader( |$)' 2>/dev/null || true
+  # so pkill -x cannot match these names. Anchor at argv[0] to match only an
+  # actual loader executable, never a shell whose arguments mention the repo.
+  sudo pkill -TERM -f '^([^ ]*/)?waf-sklookup-demo( |$)' 2>/dev/null || true
+  sudo pkill -TERM -f '^([^ ]*/)?waf-sklookup-loader( |$)' 2>/dev/null || true
   sleep 0.1
-  sudo pkill -KILL -f '(^|[ /])waf-sklookup-demo( |$)' 2>/dev/null || true
-  sudo pkill -KILL -f '(^|[ /])waf-sklookup-loader( |$)' 2>/dev/null || true
+  sudo pkill -KILL -f '^([^ ]*/)?waf-sklookup-demo( |$)' 2>/dev/null || true
+  sudo pkill -KILL -f '^([^ ]*/)?waf-sklookup-loader( |$)' 2>/dev/null || true
 }
 
 listen_ports_from_proc() {
