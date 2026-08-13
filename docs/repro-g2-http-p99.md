@@ -142,7 +142,7 @@ Legend: **V** verified by evidence · **U** unverified (next probe) · **X** exc
 | H4 | ABAB pairing / median math bug | **X** | Same Fail across block-order + ABAB; HTTPS Pass under same aggregator. |
 | H5 | Connection errors / retries inflate B | **X** | `fail=0` on all primary RESULT lines. |
 | H6 | Multi-worker / reuseport skew | **X** for this stack | HAH conf `worker_processes 1`; P1 reuseport gate separate. |
-| H7 | Per-request Lua `$waf_external_port` (`/proc/self/net/tcp` scan) | **U high** | `external_port.lua` opens and **linear-scans** `/proc/self/net/tcp` on every request before getsockname fallback. Cost scales with ESTABLISHED table size; A vs B may differ under HTTP keepalive churn. **Not yet A/B-isolated.** |
+| H7 | Per-request Lua `$waf_external_port` (`/proc/self/net/tcp` scan) | **U high** (Repo agrees primary) | `external_port.lua` opens and **linear-scans** `/proc/self/net/tcp` on every request before getsockname fallback. Cost scales with ESTABLISHED table size; A vs B may differ under HTTP keepalive churn. **Not yet A/B-isolated.** |
 | H8 | HTTP vs HTTPS masks overhead | **U** | TLS crypto dominates HTTPS p99 (~4.5 ms both legs) → small shared tax invisible; HTTP exposes ~2.7 ms gap. Does not explain *why* B>A on HTTP. |
 | H9 | Keepalive pool / `MaxIdleConnsPerHost` asymmetry by URL | **U** | httpbench keys pools per URL host:port — A (`:8080`) vs B (`:18081`) are separate pools (expected). Unlikely 29% alone; check with short-conn. |
 | H10 | Map pressure / open_ports size (ties to G6) | **U parked** | G6 during/before **1.83** with 10k opens — map/host pressure real for G6; G2 runs with only default 3 ports. Treat as separate unless G2 retest with filled map. |
@@ -186,6 +186,23 @@ Source: Test agent · same evidence tip · **Hold merge**. No full G2+G6 re-fire
 | keepalive vs short / B→A / c=1 | **In progress** (Test light probes) |
 
 Path ownership: measurement bias → Test; path hypotheses (H7 Lua `/proc` etc.) → this pack / Repo.
+
+---
+
+## 2.2 Repo code-path handoff (2026-08-13)
+
+Source: Repo agent · Hold merge PR #8/#9.
+
+| Code claim | Pack mapping |
+|------------|--------------|
+| `dispatch.bpf.c` has **no** protocol branch; A/B same sockmap slot 0; `worker_processes 1` | Strengthens **H1 X** / **H6 X** |
+| HTTPS abs≈0 ⇒ ~2.7 ms kernel tax **not** primary | Strengthens **H1 X** |
+| Primary suspect: `external_port.lua` linear `/proc/self/net/tcp` then getsockname | = **H7** (still U until Test stub / getsockname-first retest) |
+| Suggested experiment: **getsockname-first** or getsockname-only, re-run G2 | Aligns §3.1 M3/M4 |
+| Rel gate harsh on ~9 ms baseline; A→B thermal secondary | Aligns §2.1 Test notes — **do not raise gate** |
+| HAH `https_allow_http` can raise HTTP baseline vs HTTPS | Explains level shift, **not** A→B gap |
+
+Files cited: `dispatch.bpf.c` · `openresty/nginx.tengine-https-allow-http.conf.example` · `openresty/lua/waf/external_port.lua` · `scripts/accept-prod-g2-latency.sh`.
 
 ---
 
