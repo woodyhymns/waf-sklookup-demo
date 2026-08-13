@@ -2,7 +2,8 @@
 	httpbench accept-prod-p0 accept-prod-p0-cps-tls accept-prod-p0-long-p99 \
 	accept-prod-p0-loader-lifecycle accept-prod-p0-hot-ports \
 	accept-prod-p1 accept-prod-p1-map-bytes accept-prod-p1-reuseport \
-	accept-prod-p1-waf-port-path accept-prod-p1-rollback
+	accept-prod-p1-waf-port-path accept-prod-p1-rollback \
+	accept-prod-g2 accept-prod-g6
 
 export CGO_ENABLED=0
 
@@ -109,6 +110,23 @@ accept-prod-p1-rollback: build
 	OPENRESTY_NGINX_CONF="$(or $(OPENRESTY_NGINX_CONF),openresty/nginx.tengine-https-allow-http.conf.example)" \
 	LOADER_TLS_PORTS="" \
 	./scripts/accept-prod-p1-rollback.sh
+
+
+# G2 calibrated latency (abs p99 delta ≤10ms + relative ≤1.05)
+accept-prod-g2: httpbench build
+	chmod +x scripts/accept-prod-g2-latency.sh scripts/lib-prod-gng.sh
+	OPENRESTY_PREFIX="$(or $(OPENRESTY_PREFIX),/usr/local/openresty-hah)" \
+	OPENRESTY_NGINX_CONF="$(or $(OPENRESTY_NGINX_CONF),openresty/nginx.tengine-https-allow-http.conf.example)" \
+	LOADER_TLS_PORTS="" \
+	./scripts/accept-prod-g2-latency.sh
+
+# G6 hot ports retest (during/before p99 ≤1.10; open/close ≤50ms; fail=0)
+accept-prod-g6: httpbench build
+	chmod +x scripts/accept-prod-g6-hot.sh scripts/lib-prod-gng.sh
+	OPENRESTY_PREFIX="$(or $(OPENRESTY_PREFIX),/usr/local/openresty-hah)" \
+	OPENRESTY_NGINX_CONF="$(or $(OPENRESTY_NGINX_CONF),openresty/nginx.tengine-https-allow-http.conf.example)" \
+	LOADER_TLS_PORTS="" \
+	./scripts/accept-prod-g6-hot.sh
 
 clean:
 	rm -f waf-sklookup-demo dispatch_bpfel.go dispatch_bpfel.o dispatch_bpfeb.go dispatch_bpfeb.o

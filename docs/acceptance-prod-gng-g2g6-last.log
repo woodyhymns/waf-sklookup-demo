@@ -1,0 +1,201 @@
+===== G2 block-order (primary evidence) =====
+=== G2 calibrated latency (abs delta ≤10ms, ratio ≤1.05) ===
+method: keepalive warmup=3s d=20s c=8 N=5
+nginx version: openresty/1.19.3.2
+--- per-protocol blocks N=5 (A-block then B-block; reduces ABAB order bias) ---
+### HTTP leg A direct N=5
+RESULT label=A-http-s1 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.004s ok=43379 fail=0 total=43379 rps=2168.5 p50_us=3579 p90_us=4858 p99_us=5911 max_us=11730 bytes=3904110
+RESULT label=A-http-s2 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.005s ok=29613 fail=0 total=29613 rps=1480.2 p50_us=5248 p90_us=7400 p99_us=9422 max_us=16882 bytes=2665170
+RESULT label=A-http-s3 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.008s ok=22605 fail=0 total=22605 rps=1129.8 p50_us=6820 p90_us=9052 p99_us=11324 max_us=17189 bytes=2034450
+RESULT label=A-http-s4 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.005s ok=26257 fail=0 total=26257 rps=1312.5 p50_us=5933 p90_us=7928 p99_us=8742 max_us=16194 bytes=2363130
+RESULT label=A-http-s5 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.006s ok=27255 fail=0 total=27255 rps=1362.3 p50_us=5920 p90_us=7468 p99_us=9334 max_us=16823 bytes=2452950
+### HTTP leg B sk_lookup N=5
+RESULT label=B-http-s1 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.007s ok=25004 fail=0 total=25004 rps=1249.7 p50_us=6187 p90_us=8171 p99_us=12239 max_us=25893 bytes=2275364
+RESULT label=B-http-s2 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.007s ok=25106 fail=0 total=25106 rps=1254.8 p50_us=6409 p90_us=7609 p99_us=8505 max_us=17415 bytes=2284646
+RESULT label=B-http-s3 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.006s ok=25207 fail=0 total=25207 rps=1260.0 p50_us=6188 p90_us=8079 p99_us=12038 max_us=22243 bytes=2293837
+RESULT label=B-http-s4 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.006s ok=23603 fail=0 total=23603 rps=1179.7 p50_us=6561 p90_us=9431 p99_us=12559 max_us=22504 bytes=2147873
+RESULT label=B-http-s5 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.004s ok=25142 fail=0 total=25142 rps=1256.8 p50_us=5963 p90_us=8524 p99_us=11735 max_us=20309 bytes=2287922
+### HTTPS leg A direct N=5
+RESULT label=A-https-s1 mode=keepalive url=https://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.007s ok=31057 fail=0 total=31057 rps=1552.3 p50_us=4918 p90_us=7013 p99_us=8467 max_us=12054 bytes=2826187
+RESULT label=A-https-s2 mode=keepalive url=https://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.003s ok=40641 fail=0 total=40641 rps=2031.7 p50_us=3778 p90_us=5145 p99_us=6216 max_us=8389 bytes=3698331
+RESULT label=A-https-s3 mode=keepalive url=https://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.002s ok=57934 fail=0 total=57934 rps=2896.4 p50_us=2700 p90_us=3435 p99_us=4461 max_us=6492 bytes=5271994
+RESULT label=A-https-s4 mode=keepalive url=https://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.002s ok=61448 fail=0 total=61448 rps=3072.1 p50_us=2534 p90_us=3206 p99_us=4234 max_us=6005 bytes=5591768
+RESULT label=A-https-s5 mode=keepalive url=https://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.002s ok=61990 fail=0 total=61990 rps=3099.1 p50_us=2487 p90_us=3304 p99_us=4243 max_us=10353 bytes=5641090
+### HTTPS leg B sk_lookup N=5
+RESULT label=B-https-s1 mode=keepalive url=https://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.002s ok=59565 fail=0 total=59565 rps=2977.9 p50_us=2614 p90_us=3362 p99_us=4280 max_us=6413 bytes=5479980
+RESULT label=B-https-s2 mode=keepalive url=https://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.003s ok=58379 fail=0 total=58379 rps=2918.5 p50_us=2692 p90_us=3388 p99_us=4486 max_us=6544 bytes=5370868
+RESULT label=B-https-s3 mode=keepalive url=https://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.002s ok=58621 fail=0 total=58621 rps=2930.7 p50_us=2644 p90_us=3353 p99_us=4409 max_us=6529 bytes=5393132
+RESULT label=B-https-s4 mode=keepalive url=https://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.002s ok=55348 fail=0 total=55348 rps=2767.1 p50_us=2795 p90_us=3571 p99_us=5051 max_us=8257 bytes=5092016
+RESULT label=B-https-s5 mode=keepalive url=https://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.003s ok=55427 fail=0 total=55427 rps=2770.9 p50_us=2820 p90_us=3505 p99_us=4627 max_us=8449 bytes=5099284
+G2_HTTP: med_p99_A_us=9334 med_p99_B_us=12038 abs_diff_ms=2.704 ratio=1.2897 rps_A=1362.3 rps_B=1254.8 rps_ratio=0.9211 abs_ok=1 rel_ok=0
+G2_HTTPS: med_p99_A_us=4461 med_p99_B_us=4486 abs_diff_ms=0.025 ratio=1.0056 rps_A=2896.4 rps_B=2918.5 rps_ratio=1.0076 abs_ok=1 rel_ok=1
+
+### G2 summary
+| proto | med_p99_A_us | med_p99_B_us | abs_diff_ms | p99_ratio | rps_ratio | abs | rel |
+|-------|--------------|--------------|-------------|-----------|-----------|-----|-----|
+| HTTP | 9334 | 12038 | 2.704 | 1.2897 | 0.9211 | 1 | 0 |
+| HTTPS | 4461 | 4486 | 0.025 | 1.0056 | 1.0076 | 1 | 1 |
+
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| G2 abs | abs_diff_ms HTTP=2.704 HTTPS=0.025 (≤10) | Pass |
+| G2 rel | p99 ratio HTTP=1.2897 HTTPS=1.0056 (≤1.05) | Fail |
+| G1 sanity | rps ratio HTTP=0.9211 HTTPS=1.0076 | info |
+method_note=keepalive+warmup=3s+d=20s+c=8+N=5 median-of-N
+G2_ABS_RESULT=Pass
+G2_REL_RESULT=Fail
+
+===== G2 prior: paired ABAB c=8 =====
+=== G2 calibrated latency (abs delta ≤10ms, ratio ≤1.05) ===
+method: keepalive warmup=3s d=20s c=8 N=5
+nginx version: openresty/1.19.3.2
+--- paired samples N=5 ---
+### sample 1 / 5
+RESULT label=A-http-s1 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.005s ok=36730 fail=0 total=36730 rps=1836.0 p50_us=4377 p90_us=5416 p99_us=7488 max_us=11346 bytes=3305700
+RESULT label=B-http-s1 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.002s ok=27835 fail=0 total=27835 rps=1391.6 p50_us=5666 p90_us=7699 p99_us=9544 max_us=20196 bytes=2532985
+RESULT label=A-https-s1 mode=keepalive url=https://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.003s ok=26003 fail=0 total=26003 rps=1299.9 p50_us=6113 p90_us=8125 p99_us=9311 max_us=12164 bytes=2366273
+RESULT label=B-https-s1 mode=keepalive url=https://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.003s ok=35607 fail=0 total=35607 rps=1780.0 p50_us=4348 p90_us=6402 p99_us=7802 max_us=10325 bytes=3275844
+### sample 2 / 5
+RESULT label=A-http-s2 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.004s ok=38938 fail=0 total=38938 rps=1946.5 p50_us=4019 p90_us=5153 p99_us=6731 max_us=11385 bytes=3504420
+RESULT label=B-http-s2 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.007s ok=29176 fail=0 total=29176 rps=1458.3 p50_us=5414 p90_us=6978 p99_us=9227 max_us=17821 bytes=2655016
+RESULT label=A-https-s2 mode=keepalive url=https://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.004s ok=24940 fail=0 total=24940 rps=1246.7 p50_us=6490 p90_us=7829 p99_us=9425 max_us=13884 bytes=2269540
+RESULT label=B-https-s2 mode=keepalive url=https://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.003s ok=36980 fail=0 total=36980 rps=1848.7 p50_us=4288 p90_us=5462 p99_us=7012 max_us=8927 bytes=3402160
+### sample 3 / 5
+RESULT label=A-http-s3 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.004s ok=41771 fail=0 total=41771 rps=2088.1 p50_us=3805 p90_us=4687 p99_us=6055 max_us=11701 bytes=3759390
+RESULT label=B-http-s3 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.007s ok=29987 fail=0 total=29987 rps=1498.8 p50_us=5191 p90_us=6676 p99_us=8759 max_us=15460 bytes=2728817
+RESULT label=A-https-s3 mode=keepalive url=https://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.005s ok=25774 fail=0 total=25774 rps=1288.4 p50_us=6158 p90_us=7713 p99_us=8821 max_us=13237 bytes=2345434
+RESULT label=B-https-s3 mode=keepalive url=https://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.002s ok=34377 fail=0 total=34377 rps=1718.6 p50_us=4629 p90_us=6090 p99_us=7842 max_us=11711 bytes=3162684
+### sample 4 / 5
+RESULT label=A-http-s4 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.005s ok=42671 fail=0 total=42671 rps=2133.0 p50_us=3704 p90_us=4747 p99_us=6006 max_us=10183 bytes=3840390
+RESULT label=B-http-s4 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.007s ok=29946 fail=0 total=29946 rps=1496.7 p50_us=5275 p90_us=6972 p99_us=8735 max_us=19493 bytes=2725086
+RESULT label=A-https-s4 mode=keepalive url=https://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.004s ok=24542 fail=0 total=24542 rps=1226.8 p50_us=6256 p90_us=8682 p99_us=10861 max_us=14080 bytes=2233322
+RESULT label=B-https-s4 mode=keepalive url=https://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.002s ok=38722 fail=0 total=38722 rps=1935.8 p50_us=3952 p90_us=5483 p99_us=7410 max_us=12662 bytes=3562424
+### sample 5 / 5
+RESULT label=A-http-s5 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.005s ok=39602 fail=0 total=39602 rps=1979.6 p50_us=3947 p90_us=5047 p99_us=7922 max_us=18558 bytes=3564180
+RESULT label=B-http-s5 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.007s ok=29929 fail=0 total=29929 rps=1495.9 p50_us=5371 p90_us=6680 p99_us=8300 max_us=16556 bytes=2723539
+RESULT label=A-https-s5 mode=keepalive url=https://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.005s ok=25762 fail=0 total=25762 rps=1287.7 p50_us=6074 p90_us=7802 p99_us=9390 max_us=12153 bytes=2344342
+RESULT label=B-https-s5 mode=keepalive url=https://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.003s ok=35573 fail=0 total=35573 rps=1778.4 p50_us=4391 p90_us=5823 p99_us=7027 max_us=11882 bytes=3272716
+G2_HTTP: med_p99_A_us=6731 med_p99_B_us=8759 abs_diff_ms=2.028 ratio=1.3013 rps_A=1979.6 rps_B=1495.9 rps_ratio=0.7557 abs_ok=1 rel_ok=0
+G2_HTTPS: med_p99_A_us=9390 med_p99_B_us=7410 abs_diff_ms=1.980 ratio=0.7891 rps_A=1287.7 rps_B=1780.0 rps_ratio=1.3823 abs_ok=1 rel_ok=1
+
+### G2 summary
+| proto | med_p99_A_us | med_p99_B_us | abs_diff_ms | p99_ratio | rps_ratio | abs | rel |
+|-------|--------------|--------------|-------------|-----------|-----------|-----|-----|
+| HTTP | 6731 | 8759 | 2.028 | 1.3013 | 0.7557 | 1 | 0 |
+| HTTPS | 9390 | 7410 | 1.980 | 0.7891 | 1.3823 | 1 | 1 |
+
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| G2 abs | abs_diff_ms HTTP=2.028 HTTPS=1.980 (≤10) | Pass |
+| G2 rel | p99 ratio HTTP=1.3013 HTTPS=0.7891 (≤1.05) | Fail |
+| G1 sanity | rps ratio HTTP=0.7557 HTTPS=1.3823 | info |
+method_note=keepalive+warmup=3s+d=20s+c=8+N=5 median-of-N
+G2_ABS_RESULT=Pass
+G2_REL_RESULT=Fail
+
+===== G2 prior: paired ABAB c=4 =====
+=== G2 calibrated latency (abs delta ≤10ms, ratio ≤1.05) ===
+method: keepalive warmup=3s d=20s c=4 N=5
+nginx version: openresty/1.19.3.2
+--- paired samples N=5 ---
+### sample 1 / 5
+RESULT label=A-http-s1 mode=keepalive url=http://127.0.0.1:8080/ c=4 d=20s warmup=3s wall=20.002s ok=42285 fail=0 total=42285 rps=2114.0 p50_us=1794 p90_us=2611 p99_us=3762 max_us=6029 bytes=3805650
+RESULT label=B-http-s1 mode=keepalive url=http://127.0.0.1:18081/ c=4 d=20s warmup=3s wall=20.004s ok=27198 fail=0 total=27198 rps=1359.6 p50_us=2788 p90_us=4170 p99_us=5289 max_us=10571 bytes=2475018
+RESULT label=A-https-s1 mode=keepalive url=https://127.0.0.1:8080/ c=4 d=20s warmup=3s wall=20.002s ok=24391 fail=0 total=24391 rps=1219.4 p50_us=3333 p90_us=4451 p99_us=5583 max_us=10260 bytes=2219581
+RESULT label=B-https-s1 mode=keepalive url=https://127.0.0.1:18081/ c=4 d=20s warmup=3s wall=20.001s ok=43165 fail=0 total=43165 rps=2158.1 p50_us=1750 p90_us=2642 p99_us=3432 max_us=6698 bytes=3971180
+### sample 2 / 5
+RESULT label=A-http-s2 mode=keepalive url=http://127.0.0.1:8080/ c=4 d=20s warmup=3s wall=20.002s ok=40903 fail=0 total=40903 rps=2044.9 p50_us=1899 p90_us=2660 p99_us=3594 max_us=6139 bytes=3681270
+RESULT label=B-http-s2 mode=keepalive url=http://127.0.0.1:18081/ c=4 d=20s warmup=3s wall=20.002s ok=28782 fail=0 total=28782 rps=1438.9 p50_us=2686 p90_us=3789 p99_us=4798 max_us=7779 bytes=2619162
+RESULT label=A-https-s2 mode=keepalive url=https://127.0.0.1:8080/ c=4 d=20s warmup=3s wall=20.002s ok=26544 fail=0 total=26544 rps=1327.1 p50_us=2906 p90_us=4110 p99_us=5064 max_us=9169 bytes=2415504
+RESULT label=B-https-s2 mode=keepalive url=https://127.0.0.1:18081/ c=4 d=20s warmup=3s wall=20s ok=37979 fail=0 total=37979 rps=1898.9 p50_us=2044 p90_us=2862 p99_us=3969 max_us=5772 bytes=3494068
+### sample 3 / 5
+RESULT label=A-http-s3 mode=keepalive url=http://127.0.0.1:8080/ c=4 d=20s warmup=3s wall=20.002s ok=42926 fail=0 total=42926 rps=2146.1 p50_us=1794 p90_us=2592 p99_us=3335 max_us=8683 bytes=3863340
+RESULT label=B-http-s3 mode=keepalive url=http://127.0.0.1:18081/ c=4 d=20s warmup=3s wall=20.001s ok=28738 fail=0 total=28738 rps=1436.8 p50_us=2655 p90_us=3793 p99_us=5017 max_us=8666 bytes=2615158
+RESULT label=A-https-s3 mode=keepalive url=https://127.0.0.1:8080/ c=4 d=20s warmup=3s wall=20.001s ok=26247 fail=0 total=26247 rps=1312.2 p50_us=2849 p90_us=4355 p99_us=5532 max_us=9401 bytes=2388477
+RESULT label=B-https-s3 mode=keepalive url=https://127.0.0.1:18081/ c=4 d=20s warmup=3s wall=20.002s ok=39664 fail=0 total=39664 rps=1983.0 p50_us=1984 p90_us=2767 p99_us=3628 max_us=5638 bytes=3649088
+### sample 4 / 5
+RESULT label=A-http-s4 mode=keepalive url=http://127.0.0.1:8080/ c=4 d=20s warmup=3s wall=20.004s ok=41486 fail=0 total=41486 rps=2073.9 p50_us=1875 p90_us=2696 p99_us=3659 max_us=5553 bytes=3733740
+RESULT label=B-http-s4 mode=keepalive url=http://127.0.0.1:18081/ c=4 d=20s warmup=3s wall=20.003s ok=30105 fail=0 total=30105 rps=1505.0 p50_us=2579 p90_us=3680 p99_us=4987 max_us=7777 bytes=2739555
+RESULT label=A-https-s4 mode=keepalive url=https://127.0.0.1:8080/ c=4 d=20s warmup=3s wall=20.002s ok=25002 fail=0 total=25002 rps=1250.0 p50_us=3103 p90_us=4389 p99_us=5746 max_us=8921 bytes=2275182
+RESULT label=B-https-s4 mode=keepalive url=https://127.0.0.1:18081/ c=4 d=20s warmup=3s wall=20.001s ok=39840 fail=0 total=39840 rps=1991.9 p50_us=1926 p90_us=2791 p99_us=3779 max_us=6360 bytes=3665280
+### sample 5 / 5
+RESULT label=A-http-s5 mode=keepalive url=http://127.0.0.1:8080/ c=4 d=20s warmup=3s wall=20.001s ok=40506 fail=0 total=40506 rps=2025.1 p50_us=1936 p90_us=2702 p99_us=3433 max_us=12196 bytes=3645540
+RESULT label=B-http-s5 mode=keepalive url=http://127.0.0.1:18081/ c=4 d=20s warmup=3s wall=20.003s ok=30300 fail=0 total=30300 rps=1514.7 p50_us=2562 p90_us=3690 p99_us=4474 max_us=7811 bytes=2757300
+RESULT label=A-https-s5 mode=keepalive url=https://127.0.0.1:8080/ c=4 d=20s warmup=3s wall=20.003s ok=24218 fail=0 total=24218 rps=1210.7 p50_us=3275 p90_us=4782 p99_us=6480 max_us=10024 bytes=2203838
+RESULT label=B-https-s5 mode=keepalive url=https://127.0.0.1:18081/ c=4 d=20s warmup=3s wall=20.001s ok=36717 fail=0 total=36717 rps=1835.7 p50_us=2141 p90_us=2915 p99_us=4031 max_us=10324 bytes=3377964
+G2_HTTP: med_p99_A_us=3594 med_p99_B_us=4987 abs_diff_ms=1.393 ratio=1.3876 rps_A=2073.9 rps_B=1438.9 rps_ratio=0.6938 abs_ok=1 rel_ok=0
+G2_HTTPS: med_p99_A_us=5583 med_p99_B_us=3779 abs_diff_ms=1.804 ratio=0.6769 rps_A=1250.0 rps_B=1983.0 rps_ratio=1.5864 abs_ok=1 rel_ok=1
+
+### G2 summary
+| proto | med_p99_A_us | med_p99_B_us | abs_diff_ms | p99_ratio | rps_ratio | abs | rel |
+|-------|--------------|--------------|-------------|-----------|-----------|-----|-----|
+| HTTP | 3594 | 4987 | 1.393 | 1.3876 | 0.6938 | 1 | 0 |
+| HTTPS | 5583 | 3779 | 1.804 | 0.6769 | 1.5864 | 1 | 1 |
+
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| G2 abs | abs_diff_ms HTTP=1.393 HTTPS=1.804 (≤10) | Pass |
+| G2 rel | p99 ratio HTTP=1.3876 HTTPS=0.6769 (≤1.05) | Fail |
+| G1 sanity | rps ratio HTTP=0.6938 HTTPS=1.5864 | info |
+method_note=keepalive+warmup=3s+d=20s+c=4+N=5 median-of-N
+G2_ABS_RESULT=Pass
+G2_REL_RESULT=Fail
+
+===== G6 calibrated (warmup=2s d=15s c=12 N_before/during=3) =====
+=== G6 hot ports (ratio≤1.10, open/close≤50ms, fail=0) ===
+method: warmup=2s d=15s c=12 N_before=3 N_during=3
+nginx version: openresty/1.19.3.2
+--- sample BEFORE (N=3, median) ---
+RESULT label=before-1 mode=keepalive url=http://127.0.0.1:18081/ c=12 d=15s warmup=2s wall=15.006s ok=33438 fail=0 total=33438 rps=2228.2 p50_us=5265 p90_us=6861 p99_us=8085 max_us=17723 bytes=3042858
+RESULT label=before-2 mode=keepalive url=http://127.0.0.1:18081/ c=12 d=15s warmup=2s wall=15.009s ok=24141 fail=0 total=24141 rps=1608.4 p50_us=7492 p90_us=9200 p99_us=10715 max_us=25599 bytes=2196831
+RESULT label=before-3 mode=keepalive url=http://127.0.0.1:18081/ c=12 d=15s warmup=2s wall=15.01s ok=20159 fail=0 total=20159 rps=1343.0 p50_us=9043 p90_us=10154 p99_us=12183 max_us=26817 bytes=1834469
+BEFORE_MED_p99_us=10715 rps=1608.4 total_fail=0
+--- start light background traffic ---
+--- bulk open 10000 ports 20000-29999 ---
+add 4096/10000 (41.0%) elapsed=3ms rate=1379457/s
+add 8192/10000 (81.9%) elapsed=5ms rate=1800871/s
+add 10000/10000 (100.0%) elapsed=5ms rate=1904752/s
+added n=10000 slot=0 (primary) elapsed=5ms method=batch
+bulk_open_ms=23
+count=10003
+--- sample DURING (N=3, median) ---
+RESULT label=during-1 mode=keepalive url=http://127.0.0.1:18081/ c=12 d=15s warmup=2s wall=15.015s ok=14024 fail=0 total=14024 rps=934.0 p50_us=12833 p90_us=16344 p99_us=19061 max_us=43166 bytes=1276184
+RESULT label=during-2 mode=keepalive url=http://127.0.0.1:18081/ c=12 d=15s warmup=2s wall=15.011s ok=12416 fail=0 total=12416 rps=827.1 p50_us=14196 p90_us=16572 p99_us=19576 max_us=50621 bytes=1129856
+RESULT label=during-3 mode=keepalive url=http://127.0.0.1:18081/ c=12 d=15s warmup=2s wall=15.015s ok=12511 fail=0 total=12511 rps=833.2 p50_us=13799 p90_us=18022 p99_us=24528 max_us=66369 bytes=1138501
+DURING_MED_p99_us=19576 rps=833.2 total_fail=0
+--- probe hot port :20100 ---
+OpenResty M1 OK
+waf_external_port=20100
+server_port=8080
+scheme=http
+remote_addr=127.0.0.1
+--- bulk close half 20000-24999 ---
+remove 4096/5000 (81.9%) elapsed=2ms rate=1782649/s
+remove 5000/5000 (100.0%) elapsed=3ms rate=1935938/s
+removed n=5000 elapsed=3ms method=batch
+bulk_close_half_ms=17
+--- sample AFTER (N=2) ---
+RESULT label=after-1 mode=keepalive url=http://127.0.0.1:18081/ c=12 d=15s warmup=2s wall=15.011s ok=11205 fail=0 total=11205 rps=746.4 p50_us=15758 p90_us=19613 p99_us=22955 max_us=57965 bytes=1019655
+RESULT label=after-2 mode=keepalive url=http://127.0.0.1:18081/ c=12 d=15s warmup=2s wall=15.015s ok=12455 fail=0 total=12455 rps=829.5 p50_us=14545 p90_us=17042 p99_us=23891 max_us=60304 bytes=1133405
+AFTER_MED_p99_us=23423 rps=787.95 total_fail=0
+
+### G6 summary
+| phase | med_p99_us | med_rps | total_fail |
+|-------|------------|---------|------------|
+| before | 10715 | 1608.4 | 0 |
+| during (after 10000 open) | 19576 | 833.2 | 0 |
+| after (closed half) | 23423 | 787.95 | 0 |
+
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| G6 ratio | med_during/med_before=1.8270 (≤1.10) | Fail |
+| G6 open_ms | bulk open 10000 in 23ms (≤50) | Pass |
+| G6 close_ms | bulk close half in 17ms (≤50) | Pass |
+| G6 fail=0 | before/during/after total_fail=0/0/0 | Pass |
+| G6 probe | curl http://127.0.0.1:20100/ | 通过 |
+| G6 overall | ratio=1.8270 open_ms=23 close_ms=17 | Fail |
+method_note=warmup=2s+d=15s+c=12+median(N_before=3,N_during=3)
+G6_RATIO=1.8270
+G6_OPEN_MS=23
+G6_CLOSE_MS=17
+G6_RESULT=Fail

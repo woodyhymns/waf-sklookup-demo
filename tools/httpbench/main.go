@@ -18,13 +18,14 @@ import (
 
 func main() {
 	var (
-		url        = flag.String("url", "http://127.0.0.1:18081/", "target URL")
-		duration   = flag.Duration("d", 5*time.Second, "test duration")
+		url         = flag.String("url", "http://127.0.0.1:18081/", "target URL")
+		duration    = flag.Duration("d", 5*time.Second, "measurement duration (after warmup)")
 		concurrency = flag.Int("c", 50, "concurrency")
-		keepalive  = flag.Bool("keepalive", false, "reuse connections (long-conn mode)")
-		insecure   = flag.Bool("k", true, "skip TLS verify")
-		timeout    = flag.Duration("timeout", 5*time.Second, "per-request timeout")
-		label      = flag.String("label", "", "optional label printed in RESULT line")
+		keepalive   = flag.Bool("keepalive", false, "reuse connections (long-conn mode)")
+		insecure    = flag.Bool("k", true, "skip TLS verify")
+		timeout     = flag.Duration("timeout", 5*time.Second, "per-request timeout")
+		label       = flag.String("label", "", "optional label printed in RESULT line")
+		warmup      = flag.Duration("warmup", 2*time.Second, "warmup duration; latencies/ok discarded from percentiles/rps")
 	)
 	flag.Parse()
 
@@ -54,6 +55,27 @@ func main() {
 		mu    sync.Mutex
 		lats  []time.Duration
 	)
+
+	// Warmup: run traffic but discard latencies / ok counts from RESULT stats.
+	if *warmup > 0 {
+		warmDeadline := time.Now().Add(*warmup)
+		var wwg sync.WaitGroup
+		for i := 0; i < *concurrency; i++ {
+			wwg.Add(1)
+			go func() {
+				defer wwg.Done()
+				for time.Now().Before(warmDeadline) {
+					resp, err := client.Get(*url)
+					if err != nil {
+						continue
+					}
+					_, _ = io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+				}
+			}()
+		}
+		wwg.Wait()
+	}
 
 	deadline := time.Now().Add(*duration)
 	var wg sync.WaitGroup
@@ -121,8 +143,8 @@ func main() {
 		mode = "keepalive"
 	}
 
-	fmt.Printf("RESULT label=%s mode=%s url=%s c=%d d=%s wall=%s ok=%d fail=%d total=%d rps=%.1f p50_us=%d p90_us=%d p99_us=%d max_us=%d bytes=%d\n",
-		lbl, mode, *url, *concurrency, duration.String(), wall.Truncate(time.Millisecond),
+	fmt.Printf("RESULT label=%s mode=%s url=%s c=%d d=%s warmup=%s wall=%s ok=%d fail=%d total=%d rps=%.1f p50_us=%d p90_us=%d p99_us=%d max_us=%d bytes=%d\n",
+		lbl, mode, *url, *concurrency, duration.String(), warmup.String(), wall.Truncate(time.Millisecond),
 		oks, fails, total, rps,
 		p50.Microseconds(), p90.Microseconds(), p99.Microseconds(), pmax.Microseconds(),
 		bytes.Load(),
