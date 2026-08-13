@@ -73,7 +73,7 @@ hygiene_cleanup() {
   # The demo's default ports are included intentionally: final cleanup is a
   # machine-hygiene boundary, not a request to preserve a running demo.
   if [[ -x "${LOADER_BIN:-./rust/loader/target/release/waf-sklookup-loader}" ]]; then
-    sudo "${LOADER_BIN:-./rust/loader/target/release/waf-sklookup-loader}" bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
+    sudo "${LOADER_BIN:-./rust/loader/target/release/waf-sklookup-loader}" bulk close -range 1-65535 -pin-dir "$PIN_DIR" -no-file >/dev/null 2>&1 || true
   fi
 
   demo_stop || true

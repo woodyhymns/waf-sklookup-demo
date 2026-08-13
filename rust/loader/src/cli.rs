@@ -42,6 +42,7 @@ pub struct LongRunningArgs {
     pub tls_ports_set: bool,
     pub wait: Duration,
     pub pin_dir: PathBuf,
+    pub ports_file: PathBuf,
 }
 
 pub fn is_ctl_command(s: &str) -> bool {
@@ -56,6 +57,8 @@ pub fn is_ctl_command(s: &str) -> bool {
             | "bulk"
             | "load-ports"
             | "close-ports"
+            | "reconcile"
+            | "apply"
             | "help"
     )
 }
@@ -175,6 +178,7 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
             "tls-ports",
             "wait",
             "pin-dir",
+            "ports-file",
         ],
     )?;
     if flags.bool_flag("help") {
@@ -200,6 +204,7 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
         tls_ports_set: flags.flag_set("tls-ports"),
         wait: parse_duration(wait_raw).with_context(|| format!("bad -wait {wait_raw:?}"))?,
         pin_dir: PathBuf::from(flags.get("pin-dir").unwrap_or(crate::pin::DEFAULT_PIN_DIR)),
+        ports_file: PathBuf::from(flags.get("ports-file").unwrap_or("ports.conf")),
     })
 }
 
@@ -266,7 +271,8 @@ pub fn print_long_running_usage() {
            -tls-target string\n        STOCK FALLBACK only: TLS listen (default \"127.0.0.1:8443\")\n\
            -tls-ports string\n        STOCK FALLBACK steered TLS ports (empty = product path)\n\
            -wait duration\n        openresty mode: max time to wait for target listen (default 60s)\n\
-           -pin-dir string\n        bpffs directory for pinned maps (default \"/sys/fs/bpf/waf-sklookup\")\n\n",
+           -pin-dir string\n        bpffs directory for pinned maps (default \"/sys/fs/bpf/waf-sklookup\")\n\
+           -ports-file string\n        desired open_ports file (default \"ports.conf\")\n\n",
         pad = "       "
     );
     eprint!("{}", crate::ctl::CTL_USAGE);
@@ -289,6 +295,8 @@ mod tests {
             "close",
             "dump",
             "help",
+            "reconcile",
+            "apply",
         ] {
             assert!(is_ctl_command(c), "{c} should be a ctl command");
         }

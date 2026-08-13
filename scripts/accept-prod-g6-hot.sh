@@ -121,7 +121,7 @@ stop_bg() {
 echo "--- bulk open ${HOT_COUNT} ports ${HOT_START}-${END_PORT} (light bg during open) ---"
 start_bg
 T0=$(date +%s%N)
-sudo "$LOADER_BIN" bulk open -range "${HOT_START}-${END_PORT}" -pin-dir "$PIN_DIR"
+sudo "$LOADER_BIN" bulk open -range "${HOT_START}-${END_PORT}" -pin-dir "$PIN_DIR" -no-file
 T1=$(date +%s%N)
 OPEN_MS=$(( (T1 - T0) / 1000000 ))
 echo "bulk_open_ms=$OPEN_MS"
@@ -148,7 +148,7 @@ fi
 echo "--- bulk close half ${HOT_START}-${HALF_END} (light bg during close) ---"
 start_bg
 T2=$(date +%s%N)
-sudo "$LOADER_BIN" bulk close -range "${HOT_START}-${HALF_END}" -pin-dir "$PIN_DIR"
+sudo "$LOADER_BIN" bulk close -range "${HOT_START}-${HALF_END}" -pin-dir "$PIN_DIR" -no-file
 T3=$(date +%s%N)
 CLOSE_MS=$(( (T3 - T2) / 1000000 ))
 echo "bulk_close_half_ms=$CLOSE_MS"
