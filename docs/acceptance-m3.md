@@ -22,7 +22,7 @@ LADDER=10,100,1000,30000,60000 ./scripts/accept-m3-ladder.sh
 
 | 端口档 | Go loader RSS | OpenResty RSS | BPF map (`open_ports`) | QPS | CPU% | P99 | notes |
 |--------|---------------|---------------|------------------------|-----|------|-----|-------|
-| ≤10 / 10 | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| ≤10 / 10 | 7000 kB | 3932 kB | entries=10 | ~75 (curl light) | na (no pidstat) | ☐ | smoke PASS @ openresty-hah |
 | 100 | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
 | 1K | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
 | 10K | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
@@ -46,7 +46,7 @@ LADDER=10,100,1000,30000,60000 ./scripts/accept-m3-ladder.sh
 
 | # | 项 | 结果 |
 |---|----|------|
-| M3-harness | `scripts/accept-m3-ladder.sh` 可跑小阶梯 | ☐ |
+| M3-harness | `scripts/accept-m3-ladder.sh` 可跑小阶梯 | ✅ PASS (LADDER=10) |
 | M3-mem | 30K/60K RSS + BPF map 填表 | ☐ SKIP(wait M2 bulk) / ☐ |
 | M3-cpu-qps | QPS/CPU 列填齐 | ☐ |
 | M3-perf | vs 直连/PROXY | ☐ |
