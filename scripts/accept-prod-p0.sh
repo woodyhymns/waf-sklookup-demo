@@ -4,6 +4,7 @@
 #   OPENRESTY_PREFIX=/usr/local/openresty-hah ./scripts/accept-prod-p0.sh
 set -euo pipefail
 source "$(dirname "$0")/lib-prod-gng.sh"
+install_hygiene_traps
 
 OUT_MD="docs/acceptance-prod-gng-p0-last.md"
 OUT_LOG="docs/acceptance-prod-gng-p0-last.log"
@@ -22,8 +23,6 @@ export HOT_COUNT="${HOT_COUNT:-10000}"
 
 demo_stop || true
 demo_start
-cleanup() { demo_stop || true; }
-trap cleanup EXIT
 
 declare -a ROWS=()
 OVERALL="通过"

@@ -2,6 +2,7 @@
 # Umbrella: run production Go/No-Go P1 scripts a–d; write last report + log.
 set -euo pipefail
 source "$(dirname "$0")/lib-prod-gng.sh"
+install_hygiene_traps
 
 OUT_MD="docs/acceptance-prod-gng-p1-last.md"
 OUT_LOG="docs/acceptance-prod-gng-p1-last.log"
@@ -17,8 +18,6 @@ export DURATION="${DURATION:-8s}"
 export CONCURRENCY="${CONCURRENCY:-50}"
 
 demo_stop || true
-cleanup() { demo_stop || true; }
-trap cleanup EXIT
 
 declare -a ROWS=()
 OVERALL="通过"

@@ -8,12 +8,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib-prod-gng.sh"
 
 STARTED_HERE=0
-cleanup() {
-  if [[ "$STARTED_HERE" -eq 1 ]]; then
-    demo_stop
-  fi
-}
-trap cleanup EXIT
+install_hygiene_traps
 
 echo "=== P0-1 CPS + TLS handshake storm (same-port dual HTTP+HTTPS) ==="
 require_hah

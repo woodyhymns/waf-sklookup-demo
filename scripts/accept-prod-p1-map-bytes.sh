@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
 # P1-a: BPF map bytes curve vs port scale (memlock ≠ process RSS).
 # Samples bpftool open_ports memlock/max_entries + loader RSS + OpenResty RSS
-# at baseline, 30K, 60K (optional near-full ≤ u16 key space).
+# Defaults to the shared-machine 100, 1K, 10K ladder. Set M3_FULL_LADDER=1
+# to additionally run 30K/60K (and the optional near-full tier).
 set -euo pipefail
 source "$(dirname "$0")/lib-prod-gng.sh"
 
 STARTED_HERE=0
-cleanup() {
-  if [[ "$STARTED_HERE" -eq 1 ]]; then
-    demo_stop || true
-  fi
-}
-trap cleanup EXIT
+install_hygiene_traps
 
 echo "=== P1-a BPF map bytes curve (memlock vs process RSS) ==="
 require_hah
@@ -85,7 +81,7 @@ print(f"{best_ml} {best_me}")
 
 port_count() {
   local out
-  out="$(sudo ./waf-sklookup-demo list -count -pin-dir "$PIN_DIR" 2>/dev/null || true)"
+  out="$(sudo "$LOADER_BIN" list -count -pin-dir "$PIN_DIR" 2>/dev/null || true)"
   printf '%s\n' "$out" | python3 -c 'import sys,re; t=sys.stdin.read(); m=re.search(r"(\d+)", t); print(m.group(1) if m else "0")'
 }
 
@@ -112,33 +108,37 @@ echo "--- baseline (few ports) ---"
 sample "baseline_after_start"
 ROWS+=("| baseline (have=${LAST_HAVE}) | ${LAST_MEMLOCK} | ${LAST_MAXE} | ${LAST_LRSS} kB | ${LAST_ORRSS} kB | few steered ports |")
 
-echo "--- bulk fill 30000 ---"
-T0=$(date +%s%N)
-sudo ./waf-sklookup-demo bulk fill -count 30000 -start "$FILL_START" -pin-dir "$PIN_DIR"
-T1=$(date +%s%N)
-FILL30_MS=$(( (T1 - T0) / 1000000 ))
-sample "after_bulk_30k"
-HAVE30="$LAST_HAVE"
-ROWS+=("| 30K (have=${LAST_HAVE}) | ${LAST_MEMLOCK} | ${LAST_MAXE} | ${LAST_LRSS} kB | ${LAST_ORRSS} kB | fill ${FILL30_MS}ms; memlock≠RSS |")
+STATUS="通过"
+declare -a TIERS=(100 1000 10000)
+if [[ "${M3_FULL_LADDER:-0}" == "1" ]]; then
+  TIERS+=(30000 60000)
+else
+  echo "NOTE: 30K/60K disabled; set M3_FULL_LADDER=1 for the full ladder."
+fi
 
-echo "--- bulk fill 60000 ---"
-T2=$(date +%s%N)
-sudo ./waf-sklookup-demo bulk fill -count 60000 -start "$FILL_START" -pin-dir "$PIN_DIR"
-T3=$(date +%s%N)
-FILL60_MS=$(( (T3 - T2) / 1000000 ))
-sample "after_bulk_60k"
-HAVE60="$LAST_HAVE"
-ROWS+=("| 60K (have=${LAST_HAVE}) | ${LAST_MEMLOCK} | ${LAST_MAXE} | ${LAST_LRSS} kB | ${LAST_ORRSS} kB | fill ${FILL60_MS}ms; memlock≠RSS |")
+for count in "${TIERS[@]}"; do
+  echo "--- bulk fill ${count} ---"
+  T0=$(date +%s%N)
+  sudo "$LOADER_BIN" bulk fill -count "$count" -start "$FILL_START" -pin-dir "$PIN_DIR"
+  T1=$(date +%s%N)
+  FILL_MS=$(( (T1 - T0) / 1000000 ))
+  sample "after_bulk_${count}"
+  [[ "${LAST_HAVE:-0}" -lt "$count" ]] && STATUS="失败"
+  ROWS+=("| ${count} (have=${LAST_HAVE}) | ${LAST_MEMLOCK} | ${LAST_MAXE} | ${LAST_LRSS} kB | ${LAST_ORRSS} kB | fill ${FILL_MS}ms; memlock≠RSS |")
+  mark_row "map-bytes-${count}" "have=${LAST_HAVE} fill_ms=${FILL_MS}" "$([[ ${LAST_HAVE:-0} -ge $count ]] && echo 通过 || echo 失败)"
+  # Each tier is independent; never accumulate fills into the next tier.
+  sudo "$LOADER_BIN" bulk close -range "${FILL_START}-$((FILL_START + count - 1))" -pin-dir "$PIN_DIR" >/dev/null
+done
 
 NEAR_FULL_STATUS="skip"
 NEAR_COUNT=$((65535 - FILL_START + 1))
 # clamp: generateFillPorts rejects end>65535; max from 5000 is 60536
 if [[ "$NEAR_COUNT" -gt 60500 ]]; then NEAR_COUNT=60500; fi
-if [[ "${P1A_NEAR_FULL:-1}" == "1" && "$NEAR_COUNT" -gt 60000 ]]; then
+if [[ "${M3_FULL_LADDER:-0}" == "1" && "${P1A_NEAR_FULL:-0}" == "1" && "$NEAR_COUNT" -gt 60000 ]]; then
   echo "--- optional near-full fill count=${NEAR_COUNT} (100K unique N/A: u16 keys) ---"
   T4=$(date +%s%N)
   set +e
-  sudo ./waf-sklookup-demo bulk fill -count "$NEAR_COUNT" -start "$FILL_START" -pin-dir "$PIN_DIR"
+  sudo "$LOADER_BIN" bulk fill -count "$NEAR_COUNT" -start "$FILL_START" -pin-dir "$PIN_DIR"
   FRC=$?
   set -e
   T5=$(date +%s%N)
@@ -151,13 +151,10 @@ if [[ "${P1A_NEAR_FULL:-1}" == "1" && "$NEAR_COUNT" -gt 60000 ]]; then
     ROWS+=("| near-full | — | — | — | — | skipped/failed rc=$FRC ms=$FILLN_MS |")
     NEAR_FULL_STATUS="skip"
   fi
+  sudo "$LOADER_BIN" bulk close -range "${FILL_START}-$((FILL_START + NEAR_COUNT - 1))" -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
 else
   ROWS+=("| near-full | — | — | — | — | skip optional |")
 fi
-
-STATUS="通过"
-[[ "${HAVE30:-0}" -lt 30000 ]] && STATUS="失败"
-[[ "${HAVE60:-0}" -lt 60000 ]] && STATUS="失败"
 
 echo
 echo "### P1-a summary table"
@@ -169,11 +166,9 @@ echo "Emphasize: **map bytes (memlock) ≠ process RSS** — kernel charges open
 echo
 echo "| 项 | 测了什么 | 结果 |"
 echo "|----|----------|------|"
-mark_row "map-bytes-30k" "have=${HAVE30} fill_ms=${FILL30_MS}" "$([[ ${HAVE30:-0} -ge 30000 ]] && echo 通过 || echo 失败)"
-mark_row "map-bytes-60k" "have=${HAVE60} fill_ms=${FILL60_MS}" "$([[ ${HAVE60:-0} -ge 60000 ]] && echo 通过 || echo 失败)"
 mark_row "near-full" "optional ≤u16 (~${NEAR_COUNT}); 100K unique N/A" "$NEAR_FULL_STATUS"
 mark_row "memlock-vs-rss" "map memlock is kernel, ≠ process RSS" "通过"
-mark_row "P1-a overall" "BPF map bytes curve 30K/60K" "$STATUS"
+mark_row "P1-a overall" "BPF map bytes curve (${TIERS[*]})" "$STATUS"
 
 [[ "$STATUS" == "通过" ]] || exit 1
 exit 0

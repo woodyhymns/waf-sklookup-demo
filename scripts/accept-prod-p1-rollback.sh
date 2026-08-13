@@ -5,13 +5,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib-prod-gng.sh"
 
 STARTED_HERE=0
-cleanup() {
-  # Always try to leave stopped; if mid-drill, attempt restore then stop
-  if [[ -f "$STATE_DIR/loader.pid" ]] || curl -sS --max-time 1 "http://127.0.0.1:8080/" >/dev/null 2>&1; then
-    demo_stop || true
-  fi
-}
-trap cleanup EXIT
+install_hygiene_traps
 
 echo "=== P1-d rollback drill (unload sk_lookup / restore) ==="
 require_hah
