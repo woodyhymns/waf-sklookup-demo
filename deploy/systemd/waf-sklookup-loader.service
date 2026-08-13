@@ -1,0 +1,37 @@
+[Unit]
+Description=waf-sklookup BPF loader and desired-state reconciler
+Documentation=file:/opt/waf-sklookup-demo/docs/systemd.md
+Requires=waf-sklookup-openresty.service
+After=waf-sklookup-openresty.service
+OnFailure=waf-sklookup-loader-failed.service
+StartLimitIntervalSec=30s
+StartLimitBurst=3
+
+[Service]
+Type=simple
+Environment=LOADER_BIN=/opt/waf-sklookup-demo/rust/loader/target/release/waf-sklookup-loader
+Environment=PORTS_FILE=/opt/waf-sklookup-demo/ports.conf
+Environment=PIN_DIR=/sys/fs/bpf/waf-sklookup
+Environment=TARGET=127.0.0.1:8080
+Environment=WAIT=60s
+# Leave both empty for HAH/Tengine's single https_allow_http listen. Stock
+# OpenResty may set TLS_TARGET=127.0.0.1:8443 and TLS_PORTS=18443.
+Environment=TLS_TARGET=
+Environment=TLS_PORTS=
+EnvironmentFile=-/etc/waf-sklookup/waf-sklookup.env
+WorkingDirectory=/opt/waf-sklookup-demo
+ExecStart=/bin/sh -c 'set -- "$LOADER_BIN" -mode openresty -target "$TARGET" -ports-file "$PORTS_FILE" -pin-dir "$PIN_DIR" -wait "$WAIT"; if [ -n "$TLS_TARGET" ] && [ -n "$TLS_PORTS" ]; then set -- "$@" -tls-target "$TLS_TARGET" -tls-ports "$TLS_PORTS"; fi; exec "$@"'
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2s
+# This demo unit runs as root. Operators who harden it to a non-root User must
+# grant CAP_BPF and CAP_NET_ADMIN; older kernels commonly also need CAP_PERFMON
+# and/or CAP_SYS_ADMIN. See docs/systemd.md.
+User=root
+
+# OnFailure stops OpenResty immediately on each loader failure. Restart= then
+# retries the loader and its required frontend; after three rapid failures the
+# start limit prevents further retries and OpenResty remains stopped.
+
+[Install]
+WantedBy=multi-user.target

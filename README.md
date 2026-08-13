@@ -143,6 +143,10 @@ sudo apt-get install -y rustc cargo clang llvm libbpf-dev libelf-dev linux-libc-
 
 `./run.sh` runs a release Cargo build, then uses `sudo` to start the Rust toy binary.
 
+## systemd deployment
+
+Example foreground OpenResty and loader units, their fail-closed restart policy, environment overrides, and operator-only installation steps are documented in [docs/systemd.md](docs/systemd.md). Run `scripts/check-install.sh` before starting them. Do not enable these services on shared demo VMs.
+
 ## Flags
 
 ```bash
@@ -189,6 +193,8 @@ sudo ./rust/loader/target/release/waf-sklookup-loader list
 | `openresty/` | OpenResty 1.19.3.2 config + Lua for `$waf_external_port`; Tengine example listen |
 | `openresty/certs/` | `make certs` demo-only self-signed material (keys gitignored) |
 | `run-openresty-demo.sh` | Start/verify/stop OpenResty demo (HTTP + stock TLS fallback) |
+| `deploy/systemd/`, `docs/systemd.md` | Operator systemd units, environment examples, fail-closed policy, and installation guide |
+| `scripts/check-install.sh` | Read-only kernel, BPF, bpffs, privilege, loader, and OpenResty installation checks |
 | `docs/openresty-m1.md` | M1 HTTP wiring |
 | `docs/openresty-m2.md` | M2 control plane: add/remove/list/bulk, M3 seed |
 | `docs/openresty-p1.md` | P1 TLS product model, stock vs Tengine, header flag |

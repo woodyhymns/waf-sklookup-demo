@@ -1,0 +1,24 @@
+[Unit]
+Description=OpenResty for waf-sklookup
+Documentation=file:/opt/waf-sklookup-demo/docs/systemd.md
+After=network.target
+
+[Service]
+Type=simple
+Environment=OPENRESTY_PREFIX=/usr/local/openresty
+Environment=OPENRESTY_CONF=/opt/waf-sklookup-demo/openresty/nginx.conf
+Environment=OPENRESTY_RUNTIME_PREFIX=/opt/waf-sklookup-demo/openresty
+EnvironmentFile=-/etc/waf-sklookup/waf-sklookup.env
+WorkingDirectory=/opt/waf-sklookup-demo
+# The shell is used only to join an operator-overridable prefix with /bin/openresty.
+ExecStart=/bin/sh -c 'exec "$OPENRESTY_PREFIX/bin/openresty" -p "$OPENRESTY_RUNTIME_PREFIX" -c "$OPENRESTY_CONF" -g "daemon off;"'
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2s
+
+# The loader requires this unit and waits for its internal listen. On every
+# loader failure, waf-sklookup-loader-failed.service stops this unit immediately;
+# a permitted loader restart pulls it back in through Requires=.
+
+[Install]
+WantedBy=multi-user.target
