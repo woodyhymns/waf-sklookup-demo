@@ -1,0 +1,15 @@
+probe first=B mode=keepalive N=5 c=8 d=20s
+started=2026-08-13T02:17:33Z
+--- B block ---
+RESULT label=B-keepalive-s1 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.004s ok=43230 fail=0 total=43230 rps=2161.0 p50_us=3525 p90_us=5218 p99_us=7104 max_us=13885 bytes=3933930
+RESULT label=B-keepalive-s2 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.006s ok=26366 fail=0 total=26366 rps=1317.9 p50_us=6014 p90_us=7880 p99_us=10154 max_us=18100 bytes=2399306
+RESULT label=B-keepalive-s3 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.006s ok=23013 fail=0 total=23013 rps=1150.3 p50_us=6865 p90_us=8875 p99_us=10879 max_us=26207 bytes=2094183
+RESULT label=B-keepalive-s4 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.009s ok=15284 fail=0 total=15284 rps=763.8 p50_us=11777 p90_us=14069 p99_us=20385 max_us=42326 bytes=1390844
+RESULT label=B-keepalive-s5 mode=keepalive url=http://127.0.0.1:18081/ c=8 d=20s warmup=3s wall=20.011s ok=12501 fail=0 total=12501 rps=624.7 p50_us=12479 p90_us=15209 p99_us=21279 max_us=44948 bytes=1137591
+--- A block ---
+RESULT label=A-keepalive-s1 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.015s ok=12328 fail=0 total=12328 rps=615.9 p50_us=13001 p90_us=14798 p99_us=19018 max_us=34523 bytes=1109520
+RESULT label=A-keepalive-s2 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.009s ok=20701 fail=0 total=20701 rps=1034.5 p50_us=6356 p90_us=13844 p99_us=15915 max_us=35550 bytes=1863090
+RESULT label=A-keepalive-s3 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.01s ok=12163 fail=0 total=12163 rps=607.8 p50_us=12989 p90_us=16482 p99_us=21437 max_us=49521 bytes=1094670
+RESULT label=A-keepalive-s4 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.02s ok=13004 fail=0 total=13004 rps=649.5 p50_us=12232 p90_us=14798 p99_us=19471 max_us=37889 bytes=1170360
+RESULT label=A-keepalive-s5 mode=keepalive url=http://127.0.0.1:8080/ c=8 d=20s warmup=3s wall=20.009s ok=12624 fail=0 total=12624 rps=630.9 p50_us=12728 p90_us=14538 p99_us=19329 max_us=62762 bytes=1136160
+SUMMARY first=B mode=keepalive medA_p99_us=19329 medB_p99_us=10879 ratio=0.5628 A_samples=19018 15915 21437 19471 19329 B_samples=7104 10154 10879 20385 21279

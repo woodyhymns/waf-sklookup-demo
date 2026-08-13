@@ -138,16 +138,16 @@ Legend: **V** verified by evidence · **U** unverified (next probe) · **X** exc
 
 | Rank | ID | Hypothesis | Status | Why |
 |------|----|------------|--------|-----|
-| 1 | **H_order** | Keepalive + `worker_processes 1` + **A→B block order** / thermal drift | **U top** | A-http p99 drifts 5.9→11.3 ms inside one block; B runs after A on a hot single worker. ABAB shows **opposite signs** (HTTP ratio >1, HTTPS ratio <1) with `RATIO_MIN=0` (ratio <1 counts Pass) — order/noise can flip the relative story. |
+| 1 | **H_order** | Keepalive + `worker_processes 1` + **A→B block order** / thermal drift | **V (sign)** | Probe1 B-then-A ratio=0.5628 (flip). A-http p99 drifts 5.9→11.3 ms inside one block; B runs after A on a hot single worker. ABAB shows **opposite signs** (HTTP ratio >1, HTTPS ratio <1) with `RATIO_MIN=0` (ratio <1 counts Pass) — order/noise can flip the relative story. |
 | 2 | **H_gate** | Rel ≤1.05 is tight vs ~ms noise on a ~9 ms baseline | **U / framing** | Abs already **Pass** (~2.7 ms ≪ 10). A 2–3 ms gap ⇒ ratio ~1.29. Explains Fail **shape**; **not** a license to loosen the locked gate. |
-| 3 | **H7** | Per-request Lua `/proc/self/net/tcp` scan (`external_port.lua`) | **Amp** | Repo+Repro agree it can **amplify** p99 under ESTABLISHED-table growth; unlikely sole explanation of HTTP Fail + HTTPS Pass. Retest with stub / getsockname-first. |
+| 3 | **H7** | Per-request Lua `/proc/self/net/tcp` scan (`external_port.lua`) | **Amp V (abs) / X (rel root)** | Stub: abs ~19ms to 0.5ms, ratio still 1.3372. Lua is abs amp, not rel root. |
 | — | H1 | Fixed per-request BPF `sk_lookup` tax (~30%) | **X** | No protocol branch in BPF; same sockmap slot0; HTTPS abs≈0 / rel≈1.0. |
 | — | H2 | Absolute path “too slow” for abs gate | **X** | HTTP abs 2.7 ms **Pass**. |
 | — | H4 | Median / ABAB math bug | **X** | Same aggregator; HTTPS Pass. |
 | — | H5 | fail/retries inflate B | **X** | `fail=0`. |
 | — | H6 | Multi-worker / reuseport skew | **X** | `worker_processes 1`. |
 | — | H8 | HTTPS masks overhead | **Amp-ish** | TLS dominates level; does not by itself prove A→B cause. |
-| — | H9 | httpbench pool keyed by URL | **U low** | Separate pools for :8080 vs :18081; check via short-conn. |
+| — | H9 | httpbench pool keyed by URL | **X weak** | Short-conn still ratio 1.2515 -- not keepalive-pool-only. |
 | — | H10 | Map pressure (G6) | **Parked** | G2 uses ~3 ports; G6 separate. |
 | — | H11 | Wrong 8080/8443 product model | **X** | HAH + empty `LOADER_TLS_PORTS`. |
 
@@ -155,10 +155,10 @@ Legend: **V** verified by evidence · **U** unverified (next probe) · **X** exc
 
 | # | Experiment | Interprets |
 |---|------------|------------|
-| E1 | **BAAB** / **B→A** HTTP block (same c/d/N) | H_order — if ratio collapses or flips |
-| E2 | **A-A** then **B-B** same-leg repeats (stability) | H_order / thermal floor |
-| E3 | **stub resolve** / getsockname-first | H7 amplifier magnitude |
-| E4 | **short-conn** (no keepalive) | connect-path vs per-request |
+| E1 | B-then-A keepalive | **Done** -- ratio 0.5628 (sign flip) |
+| E2 | A-A / B-B same-leg | Optional leftover |
+| E3 | stub resolve | **Done** -- abs collapsed, rel 1.3372 |
+| E4 | short-conn | **Done** -- ratio 1.2515 |
 
 ### What the numbers already say
 
@@ -192,10 +192,10 @@ Source: Test agent · same evidence tip · **Hold merge**. No full G2+G6 re-fire
 | Pure ABAB order artifact | **Partially excluded** — block-order still Fail |
 | Seconds-scale noise / abs gate | **Excluded** as sole cause (abs≈2.7ms Pass) |
 | Missing warmup | **Excluded** (warmup=3s) |
-| Same-box CPU contention / thermal | **Open** — A-http p99 drifts 5.9→11.3ms within block |
+| Same-box CPU contention / thermal | **V for sign** — A-http p99 drifts 5.9→11.3ms within block |
 | Rel gate sensitive on ~9ms baseline (2–3ms → ratio>1.05) | **Noted** — explain Fail shape; **do not raise RATIO_MAX** |
 | CPU pin / isolated cores | **Not yet run** |
-| keepalive vs short / B→A / c=1 | **In progress** (Test light probes) |
+| keepalive vs short / B→A / c=1 | **Done** -- see sec 2.3 |
 
 Path ownership: measurement bias → Test; path hypotheses (H7 Lua `/proc` etc.) → this pack / Repo.
 
@@ -218,6 +218,25 @@ Files cited: `dispatch.bpf.c` · `openresty/nginx.tengine-https-allow-http.conf.
 
 ---
 
+
+## 2.3 Test probe results (2026-08-13 ~10:29 CST)
+
+Source: Test. Method: httpbench c=8 d=20s warmup=3s N=5, median p99_us, ratio=med_B/med_A. RATIO_MAX=1.05 unchanged. Lua restored after stub. No full G2+G6 re-fire.
+
+Baseline: HTTP A-then-B keepalive rel=**1.2897** (medA=9334 medB=12038).
+
+| # | Probe | med_A_us | med_B_us | ratio | Read |
+|---|-------|----------|----------|-------|------|
+| 1 | **B-then-A keepalive** | 19329 | 10879 | **0.5628** | Sign **flipped**. Later block slower. **H_order**, not a fixed path tax. |
+| 2 | **short-conn A-then-B** (no keepalive) | 216561 | 271028 | **1.2515** | Rel still Fail (~1.25). Not keepalive-only. (p99 is connect-bound, hundreds of ms.) |
+| 3 | **stub resolve() A-then-B keepalive** (constant `"18081"`, no `/proc` scan) | 513 | 686 | **1.3372** | Abs **~19ms to ~0.5ms**; ratio still ~1.34. Lua is **abs amplifier**, **not rel root**. |
+
+Logs in-tree: [g2-probes/probe-summary.txt](g2-probes/probe-summary.txt), [probe-b-then-a.log](g2-probes/probe-b-then-a.log), [probe-short.log](g2-probes/probe-short.log), [probe-stub-resolve.log](g2-probes/probe-stub-resolve.log).
+
+**Implication:** do **not** treat PR #10 getsockname-first as the G2 rel fix (abs hygiene only). Rel Fail is dominated by **block order / thermal** on a tight **H_gate**. Hold merge. Next optional: A-A/B-B stability + CPU pin (M5), not another full marathon.
+
+---
+
 ## 3. Recommended next moves
 
 ### 3.1 Prefer **measurement** first (Test) — no gate change
@@ -237,8 +256,8 @@ Files cited: `dispatch.bpf.c` · `openresty/nginx.tengine-https-allow-http.conf.
 
 | If probe says… | Change | Out of scope |
 |----------------|--------|--------------|
-| H7 confirmed | Cache `$waf_external_port` per connection; avoid full `/proc` scan each request; prefer getsockname-first if correct under sk_lookup | Rust rewrite |
-| H3 only | Document env requirements; optional longer cooldown between blocks — **still keep ≤1.05** | Relaxing ratio |
+| H7 abs amp (confirmed) | Optional PR #10 getsockname-first as **abs hygiene only** -- not G2 rel fix | Treating #10 as gate Pass |
+| H_order (sign confirmed) | Cooldown between A/B blocks; document single-worker thermal; optional CPU pin | Relaxing `RATIO_MAX` |
 | True BPF tax (unlikely) | Profile with bpftool; only then consider map/prog tweaks | Opening Rust “for speed” |
 
 ### 3.3 Explicit non-goals
@@ -257,13 +276,14 @@ Files cited: `dispatch.bpf.c` · `openresty/nginx.tengine-https-allow-http.conf.
 | `scripts/accept-prod-g2-latency.sh` | G2 harness (block-order A then B) |
 | `scripts/lib-prod-gng.sh` | HAH defaults, demo start/stop, httpbench |
 | `tools/httpbench/` | Bench binary source |
-| `openresty/lua/waf/external_port.lua` | Per-request port resolve (**H7 suspect**) |
+| `openresty/lua/waf/external_port.lua` | Per-request port resolve (**H7 abs amp**, not rel root) |
 | `openresty/nginx.tengine-https-allow-http.conf.example` | Product listen |
 | `docs/acceptance-prod-gng-g2g6-last.{md,log}` | Calibrated evidence |
+| `docs/g2-probes/` | Test three-shot logs |
 | `docs/repro-g2-http-p99.md` | **This pack** |
 
 ---
 
 ## 5. One-line verdict for Json
 
-HTTP G2 rel Fail (**~1.29**) reproduces on HAH; HTTPS rel OK ⇒ **not** BPF tax. **Lead hypotheses: H_order/thermal + H_gate framing**; H7 `/proc` scan is an **amplifier**. Next: BAAB / A-A·B-B / stub resolve — **measurement before path**, gates unchanged, no Rust, no merge.
+HTTP G2 rel Fail is **order/thermal + tight rel gate**, not BPF and not Lua /proc as rel root. B-then-A **flips** to 0.56; stub drops abs 19ms to 0.5ms but rel stays **1.34**; short-conn still **1.25**. PR #10 is abs hygiene only. **Hold merge**, gates unchanged, no Rust.
