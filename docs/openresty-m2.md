@@ -6,7 +6,31 @@ must already be up so maps stay pinned under `/sys/fs/bpf/waf-sklookup` (default
 
 **Go is the reference userspace loader.** A Rust rewrite is only after M3 / perf is OK.
 
-M3 Test uses this bulk path to flood the map for 30K / 60K RSS / map / QPS / CPU runs.
+## Test: 30K / 60K seed (copy-paste)
+
+Loader must already be running (`./run-openresty-demo.sh start`). Then fill the map.
+No nginx reload. `open_ports` is sized **131072** (was 1024).
+
+```bash
+export CGO_ENABLED=0
+# stock: OPENRESTY_PREFIX=/usr/local/openresty
+# HAH:   OPENRESTY_PREFIX=/usr/local/openresty-hah
+./run-openresty-demo.sh start    # skip if already up
+
+# preferred M3 seed
+./scripts/m3-fill-ports.sh 30000
+./scripts/m3-fill-ports.sh 60000
+
+# same thing, explicit CLI (range / file / stdin)
+sudo ./waf-sklookup-demo load-ports -range 5000-34999
+sudo ./waf-sklookup-demo load-ports -file ports.txt
+sudo ./waf-sklookup-demo load-ports -stdin < ports.txt
+sudo ./waf-sklookup-demo bulk fill -count 30000 -start 5000
+sudo ./waf-sklookup-demo list -count
+sudo bpftool map show name open_ports   # expect max_entries 131072
+```
+
+Default fill start is **5000** so 60K fits in `uint16`. HTTP API is not required for this.
 
 ## Run with the OpenResty demo
 
@@ -48,7 +72,7 @@ sudo ./waf-sklookup-demo add -tls 18444
 ./run-openresty-demo.sh list
 ```
 
-Aliases: `open`=`add`, `close`=`remove`, `dump`=`list`.
+Aliases: `open`=`add`, `close`=`remove`, `dump`=`list`, `load-ports`=`bulk add`.
 
 ## Bulk (M3 seed)
 
@@ -65,10 +89,11 @@ sudo ./waf-sklookup-demo bulk fill -count 60000 -start 5000
 ./scripts/m3-fill-ports.sh 60000
 ./run-openresty-demo.sh fill 30000
 
-# explicit range / file / stdin
+# explicit range / file / stdin (load-ports == bulk add)
+sudo ./waf-sklookup-demo load-ports -range 10000-39999
+sudo ./waf-sklookup-demo load-ports -file ports.txt
+sudo ./waf-sklookup-demo load-ports -stdin < ports.txt
 sudo ./waf-sklookup-demo bulk add -range 10000-39999
-sudo ./waf-sklookup-demo bulk add -file ports.txt
-sudo ./waf-sklookup-demo bulk add -stdin < ports.txt
 sudo ./waf-sklookup-demo bulk remove -range 10000-39999
 sudo ./waf-sklookup-demo list -count
 ```

@@ -101,7 +101,7 @@ While the loader is up (maps pinned), a second invocation of the **same Go binar
 sudo ./waf-sklookup-demo add 18083
 sudo ./waf-sklookup-demo remove 18083
 sudo ./waf-sklookup-demo list
-sudo ./waf-sklookup-demo bulk add -range 10000-39999
+sudo ./waf-sklookup-demo load-ports -range 5000-34999          # file/stdin also
 sudo ./waf-sklookup-demo bulk fill -count 30000 -start 5000   # M3 30K seed
 ./scripts/m3-fill-ports.sh 60000                               # M3 60K seed
 ```

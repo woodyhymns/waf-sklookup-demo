@@ -14,22 +14,21 @@ const ctlUsage = `M2 control plane (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-demo add PORT[,PORT|START-END...] [-tls] [-pin-dir DIR]
   sudo ./waf-sklookup-demo remove PORT[,PORT|START-END...] [-pin-dir DIR]
   sudo ./waf-sklookup-demo list [-count] [-pin-dir DIR]
-  sudo ./waf-sklookup-demo bulk add -range START-END [-tls] [-pin-dir DIR]
-  sudo ./waf-sklookup-demo bulk add -file ports.txt [-tls]
-  sudo ./waf-sklookup-demo bulk add -stdin [-tls] < ports.txt
-  sudo ./waf-sklookup-demo bulk remove -range START-END
-  sudo ./waf-sklookup-demo bulk fill -count 30000 [-start 5000]   # M3 seed
+  sudo ./waf-sklookup-demo load-ports -range START-END [-tls] [-pin-dir DIR]
+  sudo ./waf-sklookup-demo load-ports -file ports.txt
+  sudo ./waf-sklookup-demo load-ports -stdin < ports.txt
+  sudo ./waf-sklookup-demo bulk add -range START-END     # same as load-ports
+  sudo ./waf-sklookup-demo bulk fill -count 30000 [-start 5000]   # M3 30K/60K seed
 
-Aliases: open=add, close=remove, dump=list.
+Aliases: open=add, close=remove, dump=list, load-ports=bulk add.
 Legacy flags still work: -mode open-port|close-port|dump-ports.
 
-Bulk is the M3 path for 30K / 60K map fills (range/file/stdin, batched puts,
-progress + timing). Do not pass tens of thousands of ports on loader startup.
+M3 Test: ./scripts/m3-fill-ports.sh 30000   (or 60000). No OpenResty reload.
 `
 
 func isCtlCommand(s string) bool {
 	switch s {
-	case "add", "open", "remove", "close", "list", "dump", "bulk", "help":
+	case "add", "open", "remove", "close", "list", "dump", "bulk", "load-ports", "help":
 		return true
 	default:
 		return false
@@ -47,6 +46,8 @@ func runCtl(args []string) error {
 		return ctlRemove(args[1:])
 	case "list", "dump":
 		return ctlList(args[1:])
+	case "load-ports":
+		return ctlBulkAdd(args[1:])
 	case "bulk":
 		return ctlBulk(args[1:])
 	case "help":
