@@ -1,7 +1,7 @@
 # Production Go/No-Go 验收包（Acceptance）
 
 - **分支**: `test/prod-gng-acceptance`（基于 `main@09d138b`）
-- **Tip SHA**: _(fill after commit)_
+- **Tip SHA**: `3e56cf7` (pack) → results commit follows
 - **Scope**: HAH OpenResty `/usr/local/openresty-hah`（1.19.3.2 + `https_allow_http`）+ **Go loader**；Rust **DEFER**
 - **产品路径**: 同口 HTTP+HTTPS；`LOADER_TLS_PORTS=""`；conf `openresty/nginx.tengine-https-allow-http.conf.example`
 - **前置**: M3 30K/60K 内存阶梯已 PASS（见 [acceptance-m3-full-run.md](acceptance-m3-full-run.md)）
@@ -62,9 +62,9 @@ Makefile: `accept-prod-p0` / `accept-prod-p0-cps-tls` / `accept-prod-p0-long-p99
 
 | 项 | 测了什么 | 结果 |
 |----|----------|------|
-| dual-proto | 同口 HTTP+HTTPS | ☐ |
-| http-cps | 短连接 rps / p99 | ☐ |
-| tls-hs-storm | openssl s_time -new | ☐ |
+| dual-proto | 同口 :18081 HTTP+HTTPS scheme ok | 通过 |
+| http-cps | short rps=625.3 p99_us=155444 ok=3234 fail=0 (5s c=50) | 通过 |
+| tls-hs-storm | openssl s_time -new 1195 conn / 6s real (~199 CPS) | 通过 |
 
 ### P0-2 长连接吞吐 + P99（直连 vs sk_lookup）
 
@@ -75,10 +75,12 @@ Makefile: `accept-prod-p0` / `accept-prod-p0-cps-tls` / `accept-prod-p0-long-p99
 
 | leg | protocol | target | rps | p99_us | 结果 |
 |-----|----------|--------|-----|--------|------|
-| A direct | HTTP | 127.0.0.1:8080 | | | ☐ |
-| A direct | HTTPS | 127.0.0.1:8080 | | | ☐ |
-| B sk_lookup | HTTP | 127.0.0.1:18081 | | | ☐ |
-| B sk_lookup | HTTPS | 127.0.0.1:18081 | | | ☐ |
+| A direct | HTTP | 127.0.0.1:8080 | 311.1 | 1655852 | 通过 |
+| A direct | HTTPS | 127.0.0.1:8080 | 275.4 | 227819 | 通过 |
+| B sk_lookup | HTTP | 127.0.0.1:18081 | 346.2 | 1668891 | 通过 |
+| B sk_lookup | HTTPS | 127.0.0.1:18081 | 276.2 | 211831 | 通过 |
+
+注：HTTP keepalive p99 偏高（A/B 同量级，单 worker + 短窗尖刺）；sk_lookup 未显著劣于直连。
 
 ### P0-3 Loader kill / unload / restart
 
@@ -88,10 +90,10 @@ Makefile: `accept-prod-p0` / `accept-prod-p0-cps-tls` / `accept-prod-p0-long-p99
 
 | 项 | 测了什么 | 结果 |
 |----|----------|------|
-| kill-fail-mode | kill 后 curl 失败/异常可观察 | ☐ |
-| map-repin | 重启后 pin/map 重建 | ☐ |
-| curl-recover | HTTP+HTTPS 恢复 | ☐ |
-| observability | log/bpftool/ss | ☐ |
+| kill-fail-mode | kill 后 curl rc=7 / http_code=000 | 通过 |
+| map-repin | pin+open_ports max_entries=131072 重建 | 通过 |
+| curl-recover | HTTP+HTTPS :18081 恢复 200 | 通过 |
+| observability | loader.log + bpftool + ss | 通过 |
 
 ### P0-4 热加删端口 ~10k + P99
 
@@ -101,9 +103,11 @@ Makefile: `accept-prod-p0` / `accept-prod-p0-cps-tls` / `accept-prod-p0-long-p99
 
 | phase | rps | p99_us | ok | 结果 |
 |-------|-----|--------|----|------|
-| before | | | | ☐ |
-| during | | | | ☐ |
-| after | | | | ☐ |
+| before | 371.8 | 807566 | 1905 | 通过 |
+| during (10k open, 15ms) | 370.3 | 917110 | 1913 | 通过 |
+| after (close half, 14ms) | 401.4 | 889239 | 2057 | 通过 |
+
+热口探测 `:20100` → 200 / waf_external_port=20100 · 通过
 
 ---
 
@@ -129,8 +133,9 @@ sudo bpftool map show name open_ports
 
 ## Go / No-Go 判决（占位 → 跑完填写）
 
-> **Go/No-Go:** _待 P0 跑完填写。_  
-> 规则建议：P0 全 **通过** → 推荐 **Go**（仍待书面门槛确认）；任一 **失败** → **No-Go**；缺工具/环境不明 → **阻塞**。
+> **Go/No-Go:** **推荐 Go（P0 全通过 @ HAH, DURATION=5s, HOT_COUNT=10000, tip 3e56cf7）** — 仍待 Alex / Json 书面门槛确认后再上线。
+>
+> 规则：P0 全 **通过** → 推荐 **Go**（仍待书面门槛确认）；任一 **失败** → **No-Go**；缺工具/环境不明 → **阻塞**。
 
 最近一次自动跑：见 [acceptance-prod-gng-p0-last.md](acceptance-prod-gng-p0-last.md)。
 
