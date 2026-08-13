@@ -25,8 +25,9 @@ local function ip4_to_proc_hex(ip)
     return string.format("%08X", a + b * 256 + c * 65536 + d * 16777216)
 end
 
--- After sk_lookup, the ESTABLISHED 4-tuple local port is the client destination
--- (external port), not the OpenResty listen port. $server_port must not be used.
+-- Fallback: linear /proc/self/net/tcp scan. After sk_lookup, the ESTABLISHED
+-- 4-tuple local port is the client destination (external port). Used only if
+-- getfd/getsockname fails. $server_port must not be used.
 local function port_from_proc_net(remote_ip, remote_port)
     local rem_hex = ip4_to_proc_hex(remote_ip)
     if not rem_hex or not remote_port then
@@ -76,16 +77,20 @@ end
 
 local _M = {}
 
+-- After sk_lookup, getsockname on the request socket returns the client
+-- destination (external) port, not the OpenResty listen port. Prefer that
+-- first. /proc/net/tcp remains a fallback if getfd/getsockname fails.
+-- On total failure return "" and log ERR — do not fall back to $server_port.
 function _M.resolve()
-    local port, err = port_from_proc_net(ngx.var.remote_addr, ngx.var.remote_port)
+    local port, err = port_from_req_socket()
     if port then
         return port
     end
-    local port2, err2 = port_from_req_socket()
+    local port2, err2 = port_from_proc_net(ngx.var.remote_addr, ngx.var.remote_port)
     if port2 then
         return port2
     end
-    ngx.log(ngx.ERR, "waf.external_port: proc_net=", err, " getsockname=", err2,
+    ngx.log(ngx.ERR, "waf.external_port: getsockname=", err, " proc_net=", err2,
             " (not falling back to $server_port)")
     return ""
 end
