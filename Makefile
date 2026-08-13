@@ -30,5 +30,9 @@ verify-openresty:
 stop-openresty:
 	./run-openresty-demo.sh stop
 
+accept-m3-ladder:
+	chmod +x scripts/accept-m3-ladder.sh
+	./scripts/accept-m3-ladder.sh
+
 clean:
 	rm -f waf-sklookup-demo dispatch_bpfel.go dispatch_bpfel.o dispatch_bpfeb.go dispatch_bpfeb.o

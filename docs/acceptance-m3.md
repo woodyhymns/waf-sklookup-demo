@@ -1,43 +1,66 @@
-# M3 验收清单（草稿 / 预留）：压测 · 对照 · 回退
+# M3 验收清单：压测 · 内存阶梯 · 回退（Go loader）
 
-- **里程碑**: [可执行里程碑：sk_lookup → OpenResty WAF](https://app.notion.com/p/3ba6e599de1981b292abfec7ccd84417) §M3
-- **状态**: **预留草稿** — 不在 M1 执行；大规模压测待 M3 开工
-- **约束回响**: OpenResty **1.19.3.2**；外口走 `$waf_external_port`；sk_lookup → 固定内听
+- **基线**: `main` @ P1 合入后；引擎优先 **`/usr/local/openresty-hah`**（`https_allow_http`）
+- **状态**: **harness 可执行** · 满档 30K/60K **等 M2 bulk** 或接受慢速分批 `open-port`
+- **实现**: **仅 Go loader** — **Defer Rust**（复测另开，不占本表列）
+- **不 merge**（draft harness 另开 PR）
 
-## 预留：内存 vs 端口规模（Alex）
-
-压测矩阵**必须**含内存随端口规模变化，不只是吞吐/P99。
-
-| 端口阶梯 | RSS（loader / OpenResty，分开记） | BPF map 内存（`open_ports` 等，bpftool/统计） | 备注 |
-|---------|-----------------------------------|-----------------------------------------------|------|
-| 基线（少端口，如 ≤10） | ☐ | ☐ | |
-| **30K** | ☐ | ☐ | Alex 要求 |
-| **60K** | ☐ | ☐ | Alex 要求 |
-| （可选）10 / 100 / 1K / 10K 中间点 | ☐ | ☐ | 对齐 perf-deep-compare 建连阶梯时可兼用 |
-
-记录方式建议（执行时填实）：
+## 怎么跑
 
 ```bash
-# 进程 RSS（示例）
-ps -o pid,rss,comm -p <loader_pid>,<openresty_worker_pids>
-
-# BPF map 侧（以实际 map 名为准）
-sudo bpftool map show name open_ports
-# 若有 memlock / bytes 字段一并抄录；不足则补 /proc/<pid>/status VmRSS + bpftool prog/map 汇总
+export OPENRESTY_PREFIX=/usr/local/openresty-hah
+# 小阶梯（默认可现在跑）
+./scripts/accept-m3-ladder.sh
+# 满档（无 bulk 会 WARN/慢）
+LADDER=10,100,1000,30000,60000 ./scripts/accept-m3-ladder.sh
+# 或: make accept-m3-ladder
 ```
 
-产出物：**端口阶梯内存表**（上表填满）+ 简短结论（是否随端口近似线性、有无异常尖刺）。
+产出：`docs/acceptance-m3-ladder-last.csv` + 终端简表。
 
-## 其它 M3 项（占位，开工时展开）
+## 表 A — Go 端口阶梯（RSS / BPF / QPS / CPU）
+
+| 端口档 | Go loader RSS | OpenResty RSS | BPF map (`open_ports`) | QPS | CPU% | P99 | notes |
+|--------|---------------|---------------|------------------------|-----|------|-----|-------|
+| ≤10 / 10 | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| 100 | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| 1K | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| 10K | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| **30K** | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | Alex 必测 · 待 M2 bulk 或分批 |
+| **60K** | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | Alex 必测 · 待 M2 bulk 或分批 |
+
+## 表 B — 架构对照（Go sk_lookup；PROXY/直连后续）
+
+| 路径 | 端口档 | QPS | CPU% | P99 | loader RSS | OpenResty RSS | BPF map | notes |
+|------|--------|-----|------|-----|------------|---------------|---------|-------|
+| 直连 OpenResty | ≤10 | ☐ | ☐ | ☐ | — | ☐ | — | |
+| sk_lookup (Go) | 30K | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| sk_lookup (Go) | 60K | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+| PROXY（若有） | 30K/60K | ☐ | ☐ | ☐ | ☐ | ☐ | ☐ | |
+
+## Defer Rust
+
+**不**在本轮跑 Rust loader，**不**占上表列。M3 Go 基线通过后再开 Rust 同指标复测。
+
+## 勾选
 
 | # | 项 | 结果 |
 |---|----|------|
-| M3-perf | 长连接吞吐 / 短连接 CPS / P99；对照直连基线 vs sk_lookup vs PROXY | ☐ |
-| M3-scale-conn | 开通 10 / 100 / 1000 端口时建连 P99（可与上表阶梯衔接） | ☐ |
-| M3-hot | 加删端口时 P99 尖刺（定性→定量） | ☐ |
-| M3-mem | **内存 vs 端口规模（30K / 60K）+ RSS + BPF map 表** | ☐ 预留 |
-| M3-rollback | 回退演练（卸 sk_lookup → PROXY/旧架构）有记录 | ☐ |
-| M3-gate | 书面上线门槛（例：相对直连额外 CPU &lt; 3%～5%） | ☐ |
+| M3-harness | `scripts/accept-m3-ladder.sh` 可跑小阶梯 | ☐ |
+| M3-mem | 30K/60K RSS + BPF map 填表 | ☐ SKIP(wait M2 bulk) / ☐ |
+| M3-cpu-qps | QPS/CPU 列填齐 | ☐ |
+| M3-perf | vs 直连/PROXY | ☐ |
+| M3-rollback | 卸 sk_lookup 回退 | ☐ |
+| M3-gate | 门槛书面结论 | ☐ |
+| M3-rust | Rust 复测 | ☑ **DEFER** |
+
+## 阻塞
+
+| 阻塞 | 影响 | 缓解 |
+|------|------|------|
+| **M2 bulk `load-ports` / ports-file 未就绪** | 30K/60K 只能分批 `open-port`（慢、易超时） | Repo 出 bulk；或 `BATCH`+长时跑 |
+| 机器内存/CPU | 满档采样失真 | 专用压测机 |
+| PROXY 对照未实现 | 表 B PROXY 行空 | Repo 最小 PROXY 或 N/A |
 
 ---
-*预留原因: Json 预告（Alex）— M1 照旧；写 M3 清单时预留 RSS + BPF map、30K/60K 端口阶梯内存表。*
+*Test · Json M3 开工：可执行阶梯 + Go only · defer Rust*
