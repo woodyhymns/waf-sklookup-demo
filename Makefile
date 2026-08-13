@@ -1,4 +1,4 @@
-.PHONY: generate build run run-toy run-openresty verify-openresty stop-openresty test clean certs
+.PHONY: generate build run run-toy run-openresty verify-openresty stop-openresty test clean certs accept-m3-ladder
 
 export CGO_ENABLED=0
 

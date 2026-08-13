@@ -144,14 +144,15 @@ start_loader() {
   if [[ -n "${LOADER_TLS_PORTS}" ]]; then
     tls_args=(-tls-target "$TLS_TARGET" -tls-ports "$LOADER_TLS_PORTS")
   fi
-  sudo ./waf-sklookup-demo \
+  # setsid: keep loader alive after helper/harness shell exits (SIGHUP)
+  setsid sudo ./waf-sklookup-demo \
     -mode openresty \
     -target "$TARGET" \
     -ports "$LOADER_PORTS" \
     "${tls_args[@]}" \
     -wait "$WAIT" \
     -pin-dir "$PIN_DIR" \
-    >"$(state_dir)/loader.log" 2>&1 &
+    >"$(state_dir)/loader.log" 2>&1 </dev/null &
   echo $! > "$(state_dir)/loader.pid"
   local i
   for i in $(seq 1 40); do
