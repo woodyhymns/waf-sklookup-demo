@@ -17,6 +17,8 @@ Starting the loader pulls in OpenResty first. OpenResty runs in the foreground w
 
 The loader runs as root by default. A non-root deployment needs `CAP_BPF` and `CAP_NET_ADMIN`; older kernels commonly also require `CAP_PERFMON` and/or `CAP_SYS_ADMIN`. Tighten privileges only after validating the target kernel and systemd version.
 
+The example unit creates `/run/waf-sklookup` with `RuntimeDirectory=` and serves the product control plane at `CTL_SOCK=/run/waf-sklookup/ctl.sock`. The loader creates this Unix socket mode `0660`; configure `-ctl-group GID` when an operator group needs access. It verifies Linux `SO_PEERCRED`, rejects world-accessible modes, and audits every mutation. This is not an HTTP API. The direct pinned-map CLI remains a root operations escape hatch.
+
 The loader uses `Restart=on-failure`, a two-second delay, and a three-failures-in-30-seconds start limit. On every loader failure, `OnFailure` immediately invokes a oneshot that stops OpenResty. A permitted loader restart pulls its required OpenResty unit back in; once the restart budget is exhausted, both remain stopped. This is the fail-closed boundary: the frontend does not remain running with an empty or stale `sk_lookup` attachment.
 
 `PORTS_FILE` defaults to the absolute repository-root `ports.conf`, and `ExecStart` always passes `-ports-file`. The loader reconciles `open_ports` from it at startup. Edit that file and send `SIGHUP` (`systemctl reload waf-sklookup-loader`) to reconcile it without reloading OpenResty; the E1 `reconcile`/`apply` commands continue to work too.

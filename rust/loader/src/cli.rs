@@ -43,6 +43,8 @@ pub struct LongRunningArgs {
     pub wait: Duration,
     pub pin_dir: PathBuf,
     pub ports_file: PathBuf,
+    pub ctl_sock: Option<PathBuf>,
+    pub ctl_group: Option<u32>,
 }
 
 pub fn is_ctl_command(s: &str) -> bool {
@@ -168,7 +170,7 @@ fn split_flag(a: &str) -> Result<(String, Option<String>)> {
 pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
     let flags = parse_go_flags(
         argv,
-        &["help", "h"],
+        &["help", "h", "no-ctl"],
         &[
             "mode",
             "listen",
@@ -179,6 +181,8 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
             "wait",
             "pin-dir",
             "ports-file",
+            "ctl-sock",
+            "ctl-group",
         ],
     )?;
     if flags.bool_flag("help") {
@@ -187,6 +191,11 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
     }
     let mode = RunMode::parse(flags.get("mode").unwrap_or("toy"))?;
     let wait_raw = flags.get("wait").unwrap_or("60s");
+    let ctl_raw = flags.get("ctl-sock").map(str::to_owned).unwrap_or_else(|| {
+        std::env::var("CTL_SOCK").unwrap_or_else(|_| crate::sockctl::DEFAULT_CTL_SOCK.into())
+    });
+    let ctl_group = flags.get("ctl-group").map(str::parse).transpose()
+        .context("bad -ctl-group (numeric gid required)")?;
     Ok(LongRunningArgs {
         mode,
         listen: flags.get("listen").unwrap_or("127.0.0.1:18080").to_string(),
@@ -205,6 +214,8 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
         wait: parse_duration(wait_raw).with_context(|| format!("bad -wait {wait_raw:?}"))?,
         pin_dir: PathBuf::from(flags.get("pin-dir").unwrap_or(crate::pin::DEFAULT_PIN_DIR)),
         ports_file: PathBuf::from(flags.get("ports-file").unwrap_or("ports.conf")),
+        ctl_sock: (!flags.bool_flag("no-ctl") && !ctl_raw.is_empty()).then(|| PathBuf::from(ctl_raw)),
+        ctl_group,
     })
 }
 
@@ -262,7 +273,8 @@ pub fn print_long_running_usage() {
         .unwrap_or_else(|| "waf-sklookup-loader".into());
     eprint!(
         "Usage: {bin} [flags]                    # long-running toy / openresty\n\
-         {pad} {bin} <add|remove|list|bulk> ... # M2 control plane (pinned maps)\n\n\
+         {pad} {bin} ctl ...                    # product control plane (Unix socket)\n\
+         {pad} {bin} <add|remove|list|bulk> ... # root CLI escape hatch (pinned maps)\n\n\
          Rust userspace loader. Hot path is still C BPF (dispatch.bpf.c).\n\n\
            -mode string\n        toy | openresty | close-port | open-port | dump-ports (default \"toy\")\n\
            -listen string\n        toy mode: real server listen address (default \"127.0.0.1:18080\")\n\
@@ -272,7 +284,10 @@ pub fn print_long_running_usage() {
            -tls-ports string\n        STOCK FALLBACK steered TLS ports (empty = product path)\n\
            -wait duration\n        openresty mode: max time to wait for target listen (default 60s)\n\
            -pin-dir string\n        bpffs directory for pinned maps (default \"/sys/fs/bpf/waf-sklookup\")\n\
-           -ports-file string\n        desired open_ports file (default \"ports.conf\")\n\n",
+           -ports-file string\n        desired open_ports file (default \"ports.conf\")\n\
+           -ctl-sock string\n        authenticated Unix control socket (default \"/run/waf-sklookup/ctl.sock\"; empty disables)\n\
+           -ctl-group uint\n        optional numeric group owner for the control socket\n\
+           -no-ctl\n        disable the Unix control socket\n\n",
         pad = "       "
     );
     eprint!("{}", crate::ctl::CTL_USAGE);
