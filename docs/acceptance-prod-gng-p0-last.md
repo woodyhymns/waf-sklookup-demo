@@ -19,3 +19,5 @@
 **推荐: Go（P0 全通过）** — 仍待 Alex / Json 书面门槛确认后再上线。
 
 overall=通过
+
+See also: [Written gates (locked)](acceptance-prod-gng.md#written-gates-locked) (G1–G10).

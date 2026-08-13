@@ -24,3 +24,5 @@
 ## Overall
 
 overall=通过
+
+See also: [Written gates (locked)](acceptance-prod-gng.md#written-gates-locked) (G1–G10).

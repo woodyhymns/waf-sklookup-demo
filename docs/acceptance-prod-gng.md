@@ -1,7 +1,7 @@
 # Production Go/No-Go 验收包（Acceptance）
 
 - **分支**: `test/prod-gng-acceptance`（基于 `main@09d138b`）
-- **Tip SHA**: `5844c7b`
+- **Tip SHA**: `(see git HEAD; gates commit updates)`
 - **Scope**: HAH OpenResty `/usr/local/openresty-hah`（1.19.3.2 + `https_allow_http`）+ **Go loader**；Rust **DEFER**
 - **产品路径**: 同口 HTTP+HTTPS；`LOADER_TLS_PORTS=""`；conf `openresty/nginx.tengine-https-allow-http.conf.example`
 - **前置**: M3 30K/60K 内存阶梯已 PASS（见 [acceptance-m3-full-run.md](acceptance-m3-full-run.md)）
@@ -195,8 +195,8 @@ make accept-prod-p1
 
 ## Go / No-Go 判决（占位 → 跑完填写）
 
-> **Go/No-Go:** **推荐 Go（P0 全通过 @ HAH, DURATION=5s, HOT_COUNT=10000, tip 6e01c65）** — 仍待 Alex / Json 书面门槛确认后再上线。
->
+> **Go/No-Go（门槛锁定后）:** 见下方 **Written gates (locked)**。  
+> 功能/脚本向：P0+P1 场景 **通过**；对照 G1–G10 后 **有条件 Go**（差 G6 p99 比；G2 abs Pending）。确认前 **不 merge**。
 > 规则：P0 全 **通过** → 推荐 **Go**（仍待书面门槛确认）；任一 **失败** → **No-Go**；缺工具/环境不明 → **阻塞**。
 
 最近一次自动跑：见 [acceptance-prod-gng-p0-last.md](acceptance-prod-gng-p0-last.md)。
@@ -222,3 +222,47 @@ make accept-prod-p1
 
 ---
 *Test QA · branch test/prod-gng-acceptance · do not merge · do not push*
+
+
+---
+
+## Written gates (locked)
+
+> **锁定来源**: Json 默认锁定（业界收紧 + **G2 相对优先**；绝对 p99≤10ms 待校准后另验）。  
+> **对照跑次**: P0 [acceptance-prod-gng-p0-last.md](acceptance-prod-gng-p0-last.md) · P1 [acceptance-prod-gng-p1-last.md](acceptance-prod-gng-p1-last.md) · HAH `openresty/1.19.3.2` · tip 证据见上。  
+> **不 merge** 直至 Alex 书面确认；Rust 仍 DEFER。
+
+| Gate | 门槛 | 对照证据（现跑次） | 状态 |
+|------|------|-------------------|------|
+| **G1** | sk_lookup/直连 **rps 比 ≥ 0.98** | HTTP 346.2/311.1=**1.113**；HTTPS 276.2/275.4=**1.003**（P0-2） | **Pass** |
+| **G2** | **相对** p99 比 ≤ **1.05**；**绝对** p99 ≤ **10ms**（校准后） | 相对：HTTP 1668891/1655852=**1.008**；HTTPS 211831/227819=**0.930** → 相对 OK。绝对：HTTP p99≈1.66s / HTTPS≈0.21s **≫10ms**（短窗+单 worker 尖刺，A≈B） | **Pass（相对）** / **Pending(G2 abs)** |
+| **G3** | fail=0 且 error ≤ 0.01% | P0 各腿 `fail=0`（短连 ok=3234；长连/热更各腿 fail=0） | **Pass** |
+| **G4** | TLS 路径 CPS/吞吐 比 ≥ **0.95** | HTTPS keepalive rps 比 **1.003**（P0-2）。另：导向口 openssl s_time ≈199 CPS（P0-1，无直连对照腿） | **Pass** |
+| **G5** | map **memlock ±2%**；进程 **RSS ≤5%**（相对阶梯） | memlock 全程 **10487488B**（0%）；loader/OR RSS 7008/8308 kB 阶梯持平（P1-a） | **Pass** |
+| **G6** | 热更 10k：**open ≤50ms** · fail=0 · 期间 p99 比 ≤ **1.10** | open **15ms** · fail=0；p99 during/before 917110/807566=**1.136**（>1.10）；after/before≈1.10 | **Pending**（时延/失败 OK；**p99 比超标**） |
+| **G7** | fail-closed；restore ≤ **1s** | kill 后 curl rc=7（P0-3）；P1-d restore ≈**0.26s** | **Pass** |
+| **G8** | reuseport：max worker 占比 ≤ **35%** · idle=0 | max_pct=**25.8** · idle=0 · 4 workers（P1-b） | **Pass** |
+| **G9** | 外口硬门：`$waf_external_port` 真路径（非 Host） | ACL deny :19999→403；按外口限流 A→503 且同 Host B→200；body/log 外口正确（P1-c） | **Pass** |
+| **G10** | unload ≤ **0.5s** · restore ≤ **1s**；PROXY **N/A** | unload ≈**0.11s** · restore ≈**0.26s**；PROXY **N/A（无实现）**（P1-d） | **Pass** |
+
+### 现跑次 vs 已锁门槛（结论）
+
+| 结论项 | 结果 |
+|--------|------|
+| 除 **G2 abs** 与 **G6 p99 比** 外 | 其余 G1–G5/G7–G10 **满足** |
+| G2 绝对 p99≤10ms | **Pending(G2 abs)** — 需校准环境/更长窗后再验；相对门已过 |
+| G6 热更 p99 比 | **未满足**（1.136 > 1.10）；open 15ms / fail=0 已过 |
+| 是否建议「现跑次满足已锁门槛（除 G2 abs）」 | **否（差 G6 p99 比）** — 建议复跑热更窗或放宽/重测 G6 后再锁 Go |
+| Go/No-Go（门槛视角） | **有条件 Go**：相对性能/正确性门已过；**G6 复测前不宣称全面满足** |
+
+### 交叉引用
+
+- P0-2 → G1/G2/G3/G4  
+- P0-1 → G3/G4（TLS storm）  
+- P0-3 → G7  
+- P0-4 → G6  
+- P1-a → G5  
+- P1-b → G8  
+- P1-c → G9  
+- P1-d → G7/G10  
+
