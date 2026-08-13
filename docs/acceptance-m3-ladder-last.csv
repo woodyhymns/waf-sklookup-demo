@@ -1,0 +1,4 @@
+ladder,ports_want,ports_have,loader_rss_kb,openresty_rss_kb,bpf_map,qps,cpu_loader,notes
+1,1,1,7024,9916,"197: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 1024  memlock 83648B 	btf_id 158 201: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 131072  memlock 10487488B 	btf_id 167 ",102,0,baseline_after_start
+30000,30000,30000,7024,10780,"197: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 1024  memlock 83648B 	btf_id 158 201: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 131072  memlock 10487488B 	btf_id 167 ",100,0,after_bulk_30k
+60000,60000,60000,7024,10784,"197: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 1024  memlock 83648B 	btf_id 158 201: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 131072  memlock 10487488B 	btf_id 167 ",85,0,after_bulk_60k
