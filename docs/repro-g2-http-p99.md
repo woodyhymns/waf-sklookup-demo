@@ -130,23 +130,35 @@ G2_CONCURRENCY=4 ./scripts/accept-prod-g2-latency.sh
 
 ---
 
-## 2. Root-cause hypothesis table
+## 2. Root-cause hypothesis table (ordered)
 
-Legend: **V** verified by evidence · **U** unverified (next probe) · **X** excluded / weak
+**Rank rule (Repo 2026-08-13):** put **order/thermal** and **gate sensitivity** first; treat Lua `/proc` scan as an **amplifier**, not the lead story. Still exclude BPF/reuseport as primary. **Do not raise `RATIO_MAX`** — Hold merge until understood.
 
-| ID | Hypothesis | Status | Why |
-|----|------------|--------|-----|
-| H1 | Fixed per-request BPF `sk_lookup` tax (~30%) | **X** weak | HTTPS shares same sockmap slot + listen; rel ≈1.006. Keepalive → lookup mainly at accept, not every request. |
-| H2 | Absolute path “too slow” in ms | **X** for abs gate | HTTP abs 2.7 ms **Pass** (≤10). Failure is **relative** only. |
-| H3 | Measurement order / thermal (A-block then B-block) | **U** partial | Within HTTP-A, p99 drifts 5.9→11.3 ms; AFTER G6 also worsens. But **ABAB @c=4/8 still Fail HTTP rel** → order alone insufficient. |
-| H4 | ABAB pairing / median math bug | **X** | Same Fail across block-order + ABAB; HTTPS Pass under same aggregator. |
-| H5 | Connection errors / retries inflate B | **X** | `fail=0` on all primary RESULT lines. |
-| H6 | Multi-worker / reuseport skew | **X** for this stack | HAH conf `worker_processes 1`; P1 reuseport gate separate. |
-| H7 | Per-request Lua `$waf_external_port` (`/proc/self/net/tcp` scan) | **U high** (Repo agrees primary) | `external_port.lua` opens and **linear-scans** `/proc/self/net/tcp` on every request before getsockname fallback. Cost scales with ESTABLISHED table size; A vs B may differ under HTTP keepalive churn. **Not yet A/B-isolated.** |
-| H8 | HTTP vs HTTPS masks overhead | **U** | TLS crypto dominates HTTPS p99 (~4.5 ms both legs) → small shared tax invisible; HTTP exposes ~2.7 ms gap. Does not explain *why* B>A on HTTP. |
-| H9 | Keepalive pool / `MaxIdleConnsPerHost` asymmetry by URL | **U** | httpbench keys pools per URL host:port — A (`:8080`) vs B (`:18081`) are separate pools (expected). Unlikely 29% alone; check with short-conn. |
-| H10 | Map pressure / open_ports size (ties to G6) | **U parked** | G6 during/before **1.83** with 10k opens — map/host pressure real for G6; G2 runs with only default 3 ports. Treat as separate unless G2 retest with filled map. |
-| H11 | Wrong product model (8080 HTTP / 8443 TLS) | **X** | Run uses HAH single listen + empty `LOADER_TLS_PORTS`. |
+Legend: **V** verified by evidence · **U** unverified (next probe) · **X** excluded / weak · **Amp** amplifier
+
+| Rank | ID | Hypothesis | Status | Why |
+|------|----|------------|--------|-----|
+| 1 | **H_order** | Keepalive + `worker_processes 1` + **A→B block order** / thermal drift | **U top** | A-http p99 drifts 5.9→11.3 ms inside one block; B runs after A on a hot single worker. ABAB shows **opposite signs** (HTTP ratio >1, HTTPS ratio <1) with `RATIO_MIN=0` (ratio <1 counts Pass) — order/noise can flip the relative story. |
+| 2 | **H_gate** | Rel ≤1.05 is tight vs ~ms noise on a ~9 ms baseline | **U / framing** | Abs already **Pass** (~2.7 ms ≪ 10). A 2–3 ms gap ⇒ ratio ~1.29. Explains Fail **shape**; **not** a license to loosen the locked gate. |
+| 3 | **H7** | Per-request Lua `/proc/self/net/tcp` scan (`external_port.lua`) | **Amp** | Repo+Repro agree it can **amplify** p99 under ESTABLISHED-table growth; unlikely sole explanation of HTTP Fail + HTTPS Pass. Retest with stub / getsockname-first. |
+| — | H1 | Fixed per-request BPF `sk_lookup` tax (~30%) | **X** | No protocol branch in BPF; same sockmap slot0; HTTPS abs≈0 / rel≈1.0. |
+| — | H2 | Absolute path “too slow” for abs gate | **X** | HTTP abs 2.7 ms **Pass**. |
+| — | H4 | Median / ABAB math bug | **X** | Same aggregator; HTTPS Pass. |
+| — | H5 | fail/retries inflate B | **X** | `fail=0`. |
+| — | H6 | Multi-worker / reuseport skew | **X** | `worker_processes 1`. |
+| — | H8 | HTTPS masks overhead | **Amp-ish** | TLS dominates level; does not by itself prove A→B cause. |
+| — | H9 | httpbench pool keyed by URL | **U low** | Separate pools for :8080 vs :18081; check via short-conn. |
+| — | H10 | Map pressure (G6) | **Parked** | G2 uses ~3 ports; G6 separate. |
+| — | H11 | Wrong 8080/8443 product model | **X** | HAH + empty `LOADER_TLS_PORTS`. |
+
+### Priority experiments (Test / Repo)
+
+| # | Experiment | Interprets |
+|---|------------|------------|
+| E1 | **BAAB** / **B→A** HTTP block (same c/d/N) | H_order — if ratio collapses or flips |
+| E2 | **A-A** then **B-B** same-leg repeats (stability) | H_order / thermal floor |
+| E3 | **stub resolve** / getsockname-first | H7 amplifier magnitude |
+| E4 | **short-conn** (no keepalive) | connect-path vs per-request |
 
 ### What the numbers already say
 
@@ -197,7 +209,7 @@ Source: Repo agent · Hold merge PR #8/#9.
 |------------|--------------|
 | `dispatch.bpf.c` has **no** protocol branch; A/B same sockmap slot 0; `worker_processes 1` | Strengthens **H1 X** / **H6 X** |
 | HTTPS abs≈0 ⇒ ~2.7 ms kernel tax **not** primary | Strengthens **H1 X** |
-| Primary suspect: `external_port.lua` linear `/proc/self/net/tcp` then getsockname | = **H7** (still U until Test stub / getsockname-first retest) |
+| `external_port.lua` linear `/proc` then getsockname | = **H7 amplifier** (not lead); stub / getsockname-first still useful |
 | Suggested experiment: **getsockname-first** or getsockname-only, re-run G2 | Aligns §3.1 M3/M4 |
 | Rel gate harsh on ~9 ms baseline; A→B thermal secondary | Aligns §2.1 Test notes — **do not raise gate** |
 | HAH `https_allow_http` can raise HTTP baseline vs HTTPS | Explains level shift, **not** A→B gap |
@@ -212,12 +224,14 @@ Files cited: `dispatch.bpf.c` · `openresty/nginx.tengine-https-allow-http.conf.
 
 | # | Probe | Pass criterion for the *probe* | Interprets |
 |---|-------|--------------------------------|------------|
-| M1 | **B-then-A** HTTP block order (same N/c/d) | If ratio → ~1.0 while A-then-B stays ~1.3 → order/thermal | H3 |
-| M2 | **Short-conn** HTTP G2 (no `-keepalive`) | If gap shrinks a lot → connect/accept path; if stays → per-request path | H1 vs H7/H9 |
-| M3 | Stub/skip `external_port.resolve()` behind a diagnostic flag (both legs, temporary) | If HTTP ratio ≤1.05 with stub → Lua/proc path; restore code after | H7 |
-| M4 | Cache port in `ngx.ctx` once per connection (small patch, still measurement-led) | If Pass → path fix candidate for Repo | H7 |
-| M5 | Quiet box: `cpupower`/pin httpbench+openresty to isolated CPUs; re-run primary script | Stable Fail → real; flips Pass → env sensitivity note (still Hold until understood) | H3 |
-| M6 | Do **not** re-fire full G2+G6 marathon unless reproducing; reuse log above | — | — |
+| M1 | **B→A** / **BAAB** HTTP blocks (same N/c/d) | Ratio collapses/flips vs 1.2897 → H_order | H_order |
+| M2 | **A-A** / **B-B** same-leg stability | Large within-leg drift → thermal/contention | H_order |
+| M3 | **Short-conn** HTTP (no `-keepalive`) | Gap shrinks → connect path; stays → per-request/amp | H7/H9 |
+| M4 | **Stub resolve** / getsockname-first (temporary) | Ratio drop → H7 amp size; restore after | H7 Amp |
+| M5 | Quiet box / CPU pin; re-run primary script | Stable Fail → real; flips → env note (still Hold) | H_order |
+| M6 | Do **not** re-fire full G2+G6 marathon unless reproducing | — | — |
+
+**H_gate note:** documenting that rel≤1.05 is harsh on a ~9 ms baseline is allowed; **changing `RATIO_MAX` is not.**
 
 ### 3.2 **Path** changes only after a probe pins blame (Repo)
 
@@ -252,4 +266,4 @@ Files cited: `dispatch.bpf.c` · `openresty/nginx.tengine-https-allow-http.conf.
 
 ## 5. One-line verdict for Json
 
-HTTP G2 rel Fail (**~1.29**) reproduces on HAH same-port dual-protocol with calibrated httpbench; HTTPS rel OK on the same path ⇒ **not** a simple sk_lookup tax; next isolate **Lua `/proc` scan vs order/thermal** with B→A + short-conn + resolve stub — **measurement before path**, gates unchanged, no Rust, no merge.
+HTTP G2 rel Fail (**~1.29**) reproduces on HAH; HTTPS rel OK ⇒ **not** BPF tax. **Lead hypotheses: H_order/thermal + H_gate framing**; H7 `/proc` scan is an **amplifier**. Next: BAAB / A-A·B-B / stub resolve — **measurement before path**, gates unchanged, no Rust, no merge.
