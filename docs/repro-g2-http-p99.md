@@ -233,6 +233,8 @@ Baseline: HTTP A-then-B keepalive rel=**1.2897** (medA=9334 medB=12038).
 
 Logs in-tree: [g2-probes/probe-summary.txt](g2-probes/probe-summary.txt), [probe-b-then-a.log](g2-probes/probe-b-then-a.log), [probe-short.log](g2-probes/probe-short.log), [probe-stub-resolve.log](g2-probes/probe-stub-resolve.log).
 
+Test official three-line labels (same numbers): (1) A-A/B-B keepalive = baseline **1.2897**; (2) B-B/A-A keepalive = **0.5628** sign flip; (3) stub-resolve = **1.3372**. c=1 cancelled. Short-conn 1.2515 remains extra evidence.
+
 **Implication:** do **not** treat PR #10 getsockname-first as the G2 rel fix (abs hygiene only). Rel Fail is dominated by **block order / thermal** on a tight **H_gate**. Hold merge. Next optional: A-A/B-B stability + CPU pin (M5), not another full marathon.
 
 ---
