@@ -1,7 +1,7 @@
 # Production Go/No-Go 验收包（Acceptance）
 
 - **分支**: `test/prod-gng-acceptance`（基于 `main@09d138b`）
-- **Tip SHA**: `3e56cf7` (pack) → results commit follows
+- **Tip SHA**: `04127bf`
 - **Scope**: HAH OpenResty `/usr/local/openresty-hah`（1.19.3.2 + `https_allow_http`）+ **Go loader**；Rust **DEFER**
 - **产品路径**: 同口 HTTP+HTTPS；`LOADER_TLS_PORTS=""`；conf `openresty/nginx.tengine-https-allow-http.conf.example`
 - **前置**: M3 30K/60K 内存阶梯已 PASS（见 [acceptance-m3-full-run.md](acceptance-m3-full-run.md)）
@@ -133,7 +133,7 @@ sudo bpftool map show name open_ports
 
 ## Go / No-Go 判决（占位 → 跑完填写）
 
-> **Go/No-Go:** **推荐 Go（P0 全通过 @ HAH, DURATION=5s, HOT_COUNT=10000, tip 3e56cf7）** — 仍待 Alex / Json 书面门槛确认后再上线。
+> **Go/No-Go:** **推荐 Go（P0 全通过 @ HAH, DURATION=5s, HOT_COUNT=10000, tip 04127bf）** — 仍待 Alex / Json 书面门槛确认后再上线。
 >
 > 规则：P0 全 **通过** → 推荐 **Go**（仍待书面门槛确认）；任一 **失败** → **No-Go**；缺工具/环境不明 → **阻塞**。
 
