@@ -1,6 +1,6 @@
 # Production Go/No-Go G2/G6 calibrated retest (last run)
 
-- tip (pre-commit): `bd5c895`
+- tip: `a9a4009`
 - when: 2026-08-13 09:48:37 CST (utc 2026-08-13T01:48:37Z)
 - env: OPENRESTY_PREFIX=/usr/local/openresty-hah · conf=openresty/nginx.tengine-https-allow-http.conf.example · LOADER_TLS_PORTS=""
 - engine: nginx version: openresty/1.19.3.2
