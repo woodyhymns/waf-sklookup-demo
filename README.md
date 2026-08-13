@@ -107,7 +107,7 @@ sudo ./waf-sklookup-demo bulk fill -count 30000 -start 5000   # M3 30K seed
 ./scripts/m3-fill-ports.sh 60000                               # M3 60K seed
 ```
 
-Details, file/stdin input, map ceiling (**131072**, ~8–16 MB memlock), and HAH/`OPENRESTY_PREFIX` notes: [docs/openresty-m2.md](docs/openresty-m2.md). **This bulk path is what Test will use for M3.** The old `max_entries=1024` map cannot hold a 30K/60K ladder. Go remains the reference loader; a Rust rewrite is only after M3 / perf is OK.
+Details, file/stdin input, map ceiling (**131072**, ~8–16 MB memlock), and HAH/`OPENRESTY_PREFIX` notes: [docs/openresty-m2.md](docs/openresty-m2.md). **This bulk path is what Test will use for M3.** The old `max_entries=1024` map cannot hold a 30K/60K ladder. Go remains the reference loader and rollback. Userspace rewrite plan (loader-only; C BPF stays): [docs/rust-loader-plan.md](docs/rust-loader-plan.md).
 
 ## Requirements
 
@@ -165,7 +165,8 @@ sudo ./waf-sklookup-demo list
 | Path | Role |
 |------|------|
 | `dispatch.bpf.c` | `sk_lookup` program + `open_ports` / `redir_socket` maps |
-| `loader.go` | **Reference implementation** (Go). Load/attach, register listener FD, toy HTTP or OpenResty sockmap. **M2 ctl** (`add`/`remove`/`list`/`bulk`) talks to pinned maps. A Rust rewrite is later — only after M3 / perf is OK and this path is re-tested. |
+| `loader.go` | **Reference implementation** (Go). Load/attach, register listener FD, toy HTTP or OpenResty sockmap. **M2 ctl** (`add`/`remove`/`list`/`bulk`) talks to pinned maps. Keep until a Rust ladder PASS. |
+| `docs/rust-loader-plan.md` | **R0 plan:** Rust userspace loader only (not C BPF). libbpf-rs, pin/CLI parity, M3 ladder acceptance. |
 | `ctl.go` / `ports_bulk.go` | M2 control plane: CLI + batched map updates (30K/60K) |
 | `scripts/m3-fill-ports.sh` | M3 helper: `bulk fill` 30K or 60K into pinned `open_ports` |
 | `openresty/` | OpenResty 1.19.3.2 config + Lua for `$waf_external_port`; Tengine example listen |
@@ -183,7 +184,7 @@ sudo ./waf-sklookup-demo list
 
 ## Relation to the WAF plan
 
-- **End state:** BPF sk_lookup → OpenResty (TLS + Lua WAF), with Tengine `https_allow_http` so one listen takes HTTP and TLS. Toy mode is the kernel steering proof; M1 is HTTP wiring; P1 adds TLS + header policy; M2 is the port control plane. **P1/M2/M3 stay on this Go loader** (reference implementation). A Rust loader rewrite is explicitly later, only after M3 / perf is OK and the Go path is re-tested.
+- **End state:** BPF sk_lookup → OpenResty (TLS + Lua WAF), with Tengine `https_allow_http` so one listen takes HTTP and TLS. Toy mode is the kernel steering proof; M1 is HTTP wiring; P1 adds TLS + header policy; M2 is the port control plane. **P1/M2/M3 stay on this Go loader** (reference implementation / rollback). Rust userspace loader: [docs/rust-loader-plan.md](docs/rust-loader-plan.md) (first cut **loader-only**; C BPF unchanged).
 - **Transition:** PROXY + thin-accept (see `docs/`). Product semantics first; switch data plane when perf gates pass.
 - Design notes live in `docs/`; the Notion summary page links this repo as the runnable demo.
 
@@ -194,7 +195,7 @@ This is a **kernel steering proof + M1/P1 wiring + M2 control plane**, not a ful
 - M3 performance matrix ([docs/acceptance-m3.md](docs/acceptance-m3.md) stub; seed the map with `./scripts/m3-fill-ports.sh`)
 - HTTP control-plane API (CLI bulk is the M3 contract)
 - Tengine runtime in the default helper (example conf + test plan only)
-- Rust loader rewrite (later, after M3 / perf + re-test of this Go path)
+- Rust loader rewrite (planned, loader-only — [docs/rust-loader-plan.md](docs/rust-loader-plan.md); not started)
 - multi-worker reuseport sockmap
 
 ## License
