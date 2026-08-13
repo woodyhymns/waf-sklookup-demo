@@ -8,6 +8,16 @@
 
 压测矩阵**必须**含内存随端口规模变化，不只是吞吐/P99。
 
+**M2 seed (do this first):** `open_ports` is sized **131072** (was 1024 — that blocked this ladder). With the loader already running (`./run-openresty-demo.sh start`), flood the map without an OpenResty reload:
+
+```bash
+./scripts/m3-fill-ports.sh 30000
+./scripts/m3-fill-ports.sh 60000
+# equivalent: sudo ./waf-sklookup-demo bulk fill -count 30000 -start 5000
+```
+
+See [docs/openresty-m2.md](openresty-m2.md). CLI bulk is the contract; HTTP API is not required for these fills.
+
 | 端口阶梯 | RSS（loader / OpenResty，分开记） | BPF map 内存（`open_ports` 等，bpftool/统计） | 备注 |
 |---------|-----------------------------------|-----------------------------------------------|------|
 | 基线（少端口，如 ≤10） | ☐ | ☐ | |

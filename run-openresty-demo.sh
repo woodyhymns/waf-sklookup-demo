@@ -3,6 +3,7 @@
 # Product model: all steered ports → one internal listen; Tengine https_allow_http
 # accepts HTTP+TLS on that listen. Stock 1.19.3.2 has no https_allow_http, so this
 # helper also registers a labeled TLS fallback listen (8443 / -tls-ports).
+# M2: add/remove/list/bulk/fill edit pinned open_ports without reloading OpenResty.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -21,14 +22,20 @@ WAF_EXPOSE_EXTERNAL_PORT="${WAF_EXPOSE_EXTERNAL_PORT:-}"
 
 usage() {
   cat <<EOF
-Usage: $0 [start|stop|verify|close-port PORT|open-port PORT|dump-ports|certs]
+Usage: $0 [start|stop|verify|add PORT|remove PORT|list|bulk ...|fill COUNT|close-port PORT|open-port PORT|dump-ports|certs]
 
   start              Build loader, start OpenResty, attach sk_lookup
   stop               Stop loader + OpenResty started by this script
   verify             Bind check + HTTP; dual-protocol SAME-port case; stock TLS fallback
-  close-port PORT    Remove PORT from open_ports; loader must be running
-  open-port PORT     Re-insert PORT into open_ports (primary slot, or TLS if --tls)
-  dump-ports         List steered ports currently in the pinned map
+  add PORT [...]     M2: insert port(s) or START-END into pinned open_ports (no reload)
+  remove PORT [...]  M2: delete port(s) from pinned open_ports (no reload)
+  list               M2: list steered ports currently in the pinned map
+  bulk add|remove|fill
+                     M2: range/file/stdin or M3 seed (30K/60K); see docs/openresty-m2.md
+  fill COUNT [START] M3 helper: bulk fill COUNT ports from START (default 5000; 60K must fit in uint16)
+  close-port PORT    Legacy alias for remove (optional --tls)
+  open-port PORT     Legacy alias for add (optional --tls)
+  dump-ports         Legacy alias for list
   certs              Generate demo-only self-signed certs
 
 Environment:
@@ -400,8 +407,54 @@ cmd_verify() {
   echo "  Dual-protocol SAME port (http+https on :18081): REQUIRES Tengine https_allow_http"
   echo "  X-Waf-External-Port default hidden (set WAF_EXPOSE_EXTERNAL_PORT=1 and restart to expose)"
   echo "  Stock TLS fallback (NOT product): curl -k https://127.0.0.1:18443/ → 127.0.0.1:8443 ssl"
-  echo "close-port: $0 close-port 18081"
-  echo "open-port:  $0 open-port 18081"
+  echo "close-port: $0 remove 18081   # or: $0 close-port 18081"
+  echo "open-port:  $0 add 18081"
+  echo "M2 bulk:    $0 bulk add -range 20000-20010"
+  echo "M3 fill:    $0 fill 30000     # or ./scripts/m3-fill-ports.sh 30000"
+}
+
+ensure_loader_bin() {
+  if [[ ! -x ./waf-sklookup-demo ]]; then
+    build_loader
+  fi
+}
+
+cmd_add() {
+  ensure_loader_bin
+  sudo ./waf-sklookup-demo add -pin-dir "$PIN_DIR" "$@"
+}
+
+cmd_remove() {
+  ensure_loader_bin
+  sudo ./waf-sklookup-demo remove -pin-dir "$PIN_DIR" "$@"
+}
+
+cmd_list() {
+  ensure_loader_bin
+  sudo ./waf-sklookup-demo list -pin-dir "$PIN_DIR" "$@"
+}
+
+cmd_bulk() {
+  local sub="${1:-}"
+  if [[ -z "$sub" ]]; then
+    echo "usage: $0 bulk add|remove|fill [flags]" >&2
+    exit 1
+  fi
+  shift
+  ensure_loader_bin
+  sudo ./waf-sklookup-demo bulk "$sub" -pin-dir "$PIN_DIR" "$@"
+}
+
+cmd_fill() {
+  local count="${1:-}"
+  local start="${2:-5000}"
+  if [[ -z "$count" ]]; then
+    echo "usage: $0 fill COUNT [START]" >&2
+    echo "M3 examples: $0 fill 30000    $0 fill 60000" >&2
+    exit 1
+  fi
+  ensure_loader_bin
+  sudo ./waf-sklookup-demo bulk fill -count "$count" -start "$start" -pin-dir "$PIN_DIR"
 }
 
 cmd_close_port() {
@@ -411,13 +464,10 @@ cmd_close_port() {
     echo "usage: $0 close-port PORT [--tls]" >&2
     exit 1
   fi
-  if [[ ! -x ./waf-sklookup-demo ]]; then
-    build_loader
-  fi
-  if [[ "$kind" == "--tls" || "$kind" == "tls" ]]; then
-    sudo ./waf-sklookup-demo -mode close-port -tls-ports "$p" -pin-dir "$PIN_DIR"
-  else
-    sudo ./waf-sklookup-demo -mode close-port -ports "$p" -pin-dir "$PIN_DIR"
+  # Slot is irrelevant for delete; --tls kept for M1/P1 script compatibility.
+  cmd_remove "$p"
+  if [[ "$kind" != "--tls" && "$kind" != "tls" && -n "$kind" ]]; then
+    echo "warning: ignoring extra arg $kind" >&2
   fi
 }
 
@@ -428,27 +478,26 @@ cmd_open_port() {
     echo "usage: $0 open-port PORT [--tls]" >&2
     exit 1
   fi
-  if [[ ! -x ./waf-sklookup-demo ]]; then
-    build_loader
-  fi
   if [[ "$kind" == "--tls" || "$kind" == "tls" ]]; then
-    sudo ./waf-sklookup-demo -mode open-port -tls-ports "$p" -pin-dir "$PIN_DIR"
+    cmd_add -tls "$p"
   else
-    sudo ./waf-sklookup-demo -mode open-port -ports "$p" -pin-dir "$PIN_DIR"
+    cmd_add "$p"
   fi
 }
 
 cmd_dump_ports() {
-  if [[ ! -x ./waf-sklookup-demo ]]; then
-    build_loader
-  fi
-  sudo ./waf-sklookup-demo -mode dump-ports -pin-dir "$PIN_DIR"
+  cmd_list
 }
 
 case "${1:-start}" in
   start) cmd_start ;;
   stop) cmd_stop ;;
   verify) cmd_verify ;;
+  add) shift; cmd_add "$@" ;;
+  remove) shift; cmd_remove "$@" ;;
+  list) shift; cmd_list "$@" ;;
+  bulk) shift; cmd_bulk "$@" ;;
+  fill) shift; cmd_fill "$@" ;;
   close-port) cmd_close_port "${2:-}" "${3:-}" ;;
   open-port) cmd_open_port "${2:-}" "${3:-}" ;;
   dump-ports) cmd_dump_ports ;;

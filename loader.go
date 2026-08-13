@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -43,6 +44,20 @@ const (
 )
 
 func main() {
+	if len(os.Args) > 1 && isCtlCommand(os.Args[1]) {
+		if err := runCtl(os.Args[1:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags]                    # long-running toy / openresty\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "       %s <add|remove|list|bulk> ... # M2 control plane (pinned maps)\n\n", os.Args[0])
+		flag.PrintDefaults()
+		fmt.Fprint(os.Stderr, "\n"+ctlUsage)
+	}
+
 	modeFlag := flag.String("mode", string(modeToy), "toy | openresty | close-port | open-port | dump-ports")
 	listen := flag.String("listen", "127.0.0.1:18080", "toy mode: real server listen address")
 	target := flag.String("target", "127.0.0.1:8080", "openresty mode: primary internal listen registered into sockmap slot 0")
@@ -464,23 +479,35 @@ func openPinnedPorts(pinDir string, httpPorts, tlsPorts []uint16) error {
 }
 
 func dumpPinnedPorts(pinDir string) error {
-	m, err := ebpf.LoadPinnedMap(filepath.Join(pinDir, "open_ports"), nil)
+	return listPinnedPorts(pinDir, os.Stdout, false)
+}
+
+func listPinnedPorts(pinDir string, w io.Writer, countOnly bool) error {
+	m, err := loadPinnedOpenPorts(pinDir)
 	if err != nil {
-		return fmt.Errorf("load pinned open_ports: %w", err)
+		return err
 	}
 	defer m.Close()
 	var key uint16
 	var val uint8
+	n := 0
 	iter := m.Iterate()
 	for iter.Next(&key, &val) {
+		n++
+		if countOnly {
+			continue
+		}
 		label := "primary"
 		if val == uint8(redirTLS) {
 			label = "tls-fallback"
 		}
-		fmt.Printf("%d\tredir=%d\t%s\n", key, val, label)
+		fmt.Fprintf(w, "%d\tredir=%d\t%s\n", key, val, label)
 	}
 	if err := iter.Err(); err != nil {
 		return err
+	}
+	if countOnly {
+		fmt.Fprintf(w, "count=%d\n", n)
 	}
 	return nil
 }
@@ -521,8 +548,10 @@ func printOpenRestyInstructions(targetAddr string, steeredPorts []uint16, tlsTar
 	}
 	fmt.Println("Default responses omit X-Waf-External-Port; access_log still has $waf_external_port.")
 	fmt.Println("Expose header: WAF_EXPOSE_EXTERNAL_PORT=1 (restart OpenResty).")
-	fmt.Println("Close: sudo ./waf-sklookup-demo -mode close-port -ports 18081")
-	fmt.Println("Reopen: sudo ./waf-sklookup-demo -mode open-port -ports 18081")
+	fmt.Println("M2 ctl: sudo ./waf-sklookup-demo add|remove|list|bulk  (no OpenResty reload)")
+	fmt.Println("Close:  sudo ./waf-sklookup-demo remove 18081")
+	fmt.Println("Reopen: sudo ./waf-sklookup-demo add 18081")
+	fmt.Println("Legacy: sudo ./waf-sklookup-demo -mode close-port -ports 18081")
 	fmt.Println("Ctrl+C to stop the loader (OpenResty keeps running).")
 	fmt.Println("====================================")
 }

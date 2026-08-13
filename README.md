@@ -4,7 +4,7 @@ Minimal demo: **one** userspace `listen()`, many extra TCP ports opened only via
 
 Useful as a building block for WAF / OpenResty-style **runtime dynamic non-standard listen ports** on kernels that support `sk_lookup` (Linux ≥ 5.9; HCE 2.0 / kernel 5.10 qualifies).
 
-**M1:** steer those ports into **OpenResty 1.19.3.2** on a fixed internal listen (`127.0.0.1:8080`) and record the client destination as **`$waf_external_port`**. **P1:** TLS is terminated only in OpenResty; production uses Tengine **`https_allow_http`** so **one listen accepts both HTTP and TLS**. Stock 1.19.3.2 cannot do that — the demo’s second listen (`:8443 ssl`) is a labeled fallback. Default responses **omit** `X-Waf-External-Port` (enable with `WAF_EXPOSE_EXTERNAL_PORT=1`). Toy HTTP remains `-mode toy`.
+**M1:** steer those ports into **OpenResty 1.19.3.2** on a fixed internal listen (`127.0.0.1:8080`) and record the client destination as **`$waf_external_port`**. **P1:** TLS is terminated only in OpenResty; production uses Tengine **`https_allow_http`** so **one listen accepts both HTTP and TLS**. Stock 1.19.3.2 cannot do that — the demo’s second listen (`:8443 ssl`) is a labeled fallback. Default responses **omit** `X-Waf-External-Port` (enable with `WAF_EXPOSE_EXTERNAL_PORT=1`). Toy HTTP remains `-mode toy`. **M2:** hot add/remove/list/bulk against the pinned `open_ports` map (no OpenResty reload); bulk fill is the M3 30K/60K seed path.
 
 ## 10-minute quick start (toy HTTP)
 
@@ -43,7 +43,7 @@ Without the BPF program attached, steered-port curls should fail.
 
 ## M1 + P1: sk_lookup → OpenResty (HTTP + TLS)
 
-**M1 acceptance:** [docs/acceptance-m1.md](docs/acceptance-m1.md). Design: [docs/openresty-m1.md](docs/openresty-m1.md). **P1 (this branch):** [docs/openresty-p1.md](docs/openresty-p1.md).
+**M1 acceptance:** [docs/acceptance-m1.md](docs/acceptance-m1.md). Design: [docs/openresty-m1.md](docs/openresty-m1.md). **P1:** [docs/openresty-p1.md](docs/openresty-p1.md). **M2 control plane:** [docs/openresty-m2.md](docs/openresty-m2.md).
 
 OpenResty binds **fixed internal listens** only. The loader registers those listen FDs into the sockmap and opens extra ports in BPF. Do **not** use `$server_port` as the business/external port (after `sk_lookup` it is often `8080` / `8443`). Use **`$waf_external_port`**.
 
@@ -65,12 +65,13 @@ make certs   # demo-only self-signed cert (required for :8443 ssl on stock 1.19.
 # OpenResty 1.19.3.2 via docker (host network) or local prefix:
 #   docker compose -f openresty/docker-compose.yml up -d
 #   # or: OPENRESTY_PREFIX=/usr/local/openresty
+#   # HAH (https_allow_http): OPENRESTY_PREFIX=/usr/local/openresty-hah
 ./run-openresty-demo.sh start
 ./run-openresty-demo.sh verify          # HTTP + stock HTTPS fallback; header hidden
 curl -sS -D- http://127.0.0.1:18081/   # no X-Waf-External-Port by default
 curl -sk -D- https://127.0.0.1:18443/  # steered TLS (stock fallback; -k = self-signed)
-./run-openresty-demo.sh close-port 18081
-./run-openresty-demo.sh open-port 18081
+./run-openresty-demo.sh remove 18081    # M2: hot-close, no OpenResty reload
+./run-openresty-demo.sh add 18081
 ./run-openresty-demo.sh stop
 
 # Debug header (restart OpenResty so nginx env is picked up):
@@ -91,6 +92,21 @@ Client → :18081 / :18082 / :65500  ──sk_lookup──►  fixed internal li
 - Real bind: toy `:18080`, or OpenResty `:8080` (and stock fallback `:8443`)
 - Steered ports (default): `18081`, `18082`, `65500` → primary listen; stock TLS demo also steers `18443` → `:8443`
 - Removing a map entry closes that external port without touching nginx/OpenResty config
+
+## M2: port control plane
+
+While the loader is up (maps pinned), a second invocation of the **same Go binary** edits `open_ports`. OpenResty is not reloaded; the BPF program is not re-attached.
+
+```bash
+sudo ./waf-sklookup-demo add 18083
+sudo ./waf-sklookup-demo remove 18083
+sudo ./waf-sklookup-demo list
+sudo ./waf-sklookup-demo bulk add -range 10000-39999
+sudo ./waf-sklookup-demo bulk fill -count 30000 -start 5000   # M3 30K seed
+./scripts/m3-fill-ports.sh 60000                               # M3 60K seed
+```
+
+Details, file/stdin input, map ceiling (**131072**, ~8–16 MB memlock), and HAH/`OPENRESTY_PREFIX` notes: [docs/openresty-m2.md](docs/openresty-m2.md). **This bulk path is what Test will use for M3.** The old `max_entries=1024` map cannot hold a 30K/60K ladder. Go remains the reference loader; a Rust rewrite is only after M3 / perf is OK.
 
 ## Requirements
 
@@ -124,8 +140,10 @@ sudo ./waf-sklookup-demo -mode openresty \
   -tls-target 127.0.0.1:8443 -tls-ports 18443
 
 # Drop / re-open a steered port (loader must still be running; maps pinned)
-sudo ./waf-sklookup-demo -mode close-port -ports 18081
-sudo ./waf-sklookup-demo -mode open-port -ports 18081
+sudo ./waf-sklookup-demo add 18081
+sudo ./waf-sklookup-demo remove 18081
+sudo ./waf-sklookup-demo list
+# legacy: -mode close-port | open-port | dump-ports
 ```
 
 ## Troubleshooting
@@ -146,32 +164,36 @@ sudo ./waf-sklookup-demo -mode open-port -ports 18081
 | Path | Role |
 |------|------|
 | `dispatch.bpf.c` | `sk_lookup` program + `open_ports` / `redir_socket` maps |
-| `loader.go` | **Reference implementation** (Go). Load/attach, register listener FD, toy HTTP or OpenResty sockmap. A Rust rewrite is later — only after perf is OK and this path is re-tested. |
+| `loader.go` | **Reference implementation** (Go). Load/attach, register listener FD, toy HTTP or OpenResty sockmap. **M2 ctl** (`add`/`remove`/`list`/`bulk`) talks to pinned maps. A Rust rewrite is later — only after M3 / perf is OK and this path is re-tested. |
+| `ctl.go` / `ports_bulk.go` | M2 control plane: CLI + batched map updates (30K/60K) |
+| `scripts/m3-fill-ports.sh` | M3 helper: `bulk fill` 30K or 60K into pinned `open_ports` |
 | `openresty/` | OpenResty 1.19.3.2 config + Lua for `$waf_external_port`; Tengine example listen |
 | `openresty/certs/` | `make certs` demo-only self-signed material (keys gitignored) |
 | `run-openresty-demo.sh` | Start/verify/stop OpenResty demo (HTTP + stock TLS fallback) |
 | `docs/openresty-m1.md` | M1 HTTP wiring |
+| `docs/openresty-m2.md` | M2 control plane: add/remove/list/bulk, M3 seed |
 | `docs/openresty-p1.md` | P1 TLS product model, stock vs Tengine, header flag |
 | `docs/acceptance-p1.md` | P1 QA: same-port dual protocol (Tengine) vs stock TLS fallback |
 | `docs/acceptance-m1.md` | QA checklist (M1-1…M1-5 required) |
-| `docs/acceptance-m3.md` | M3 stub only (30K/60K memory ladder); not executed in this PR |
+| `docs/acceptance-m2.md` | M2 QA: add/remove/list/bulk + 30K/60K fill |
+| `docs/acceptance-m3.md` | M3 stub (30K/60K memory ladder); seed via M2 bulk fill |
 | `docs/design-thin-accept-openresty.md` | Transition design: PROXY v2 + thin-accept + OpenResty TLS |
 | `docs/perf-deep-compare.md` | Reload / PROXY / TPROXY / sk_lookup performance comparison |
 
 ## Relation to the WAF plan
 
-- **End state:** BPF sk_lookup → OpenResty (TLS + Lua WAF), with Tengine `https_allow_http` so one listen takes HTTP and TLS. Toy mode is the kernel steering proof; M1 is HTTP wiring; P1 adds TLS + header policy. **P1/M3 stay on this Go loader** (reference implementation). A Rust loader rewrite is explicitly later, only after perf is OK and the Go path is re-tested.
+- **End state:** BPF sk_lookup → OpenResty (TLS + Lua WAF), with Tengine `https_allow_http` so one listen takes HTTP and TLS. Toy mode is the kernel steering proof; M1 is HTTP wiring; P1 adds TLS + header policy; M2 is the port control plane. **P1/M2/M3 stay on this Go loader** (reference implementation). A Rust loader rewrite is explicitly later, only after M3 / perf is OK and the Go path is re-tested.
 - **Transition:** PROXY + thin-accept (see `docs/`). Product semantics first; switch data plane when perf gates pass.
 - Design notes live in `docs/`; the Notion summary page links this repo as the runnable demo.
 
 ## Not production
 
-This is a **kernel steering proof + M1 wiring**, not a full WAF integration. Still out of scope here:
+This is a **kernel steering proof + M1/P1 wiring + M2 control plane**, not a full WAF integration. Still out of scope here:
 
-- M2 hot-add API / control plane
-- M3 performance matrix ([docs/acceptance-m3.md](docs/acceptance-m3.md) stub is in this PR, not run)
+- M3 performance matrix ([docs/acceptance-m3.md](docs/acceptance-m3.md) stub; seed the map with `./scripts/m3-fill-ports.sh`)
+- HTTP control-plane API (CLI bulk is the M3 contract)
 - Tengine runtime in the default helper (example conf + test plan only)
-- Rust loader rewrite (later, after perf + re-test of this Go path)
+- Rust loader rewrite (later, after M3 / perf + re-test of this Go path)
 - multi-worker reuseport sockmap
 
 ## License

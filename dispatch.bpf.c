@@ -17,7 +17,15 @@ char LICENSE[] SEC("license") = "GPL";
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 1024);
+	/* 131072: M3 30K/60K fills need >>1024. Hash maps should not sit at 100%
+	 * occupancy (60K/65536 ≈ 92%), so 2×64K gives headroom.
+	 * Memory: kernel precharges max_entries × hash-elem overhead (not just
+	 * u16+u8). Expect ~8–16 MB memlock for this map (bpftool map show);
+	 * old 1024-entry map was ~64–128 KB. Userspace RSS is not the 60K×port
+	 * cost — that lives in the kernel map. Restart the loader once after
+	 * this change so the new size is pinned; OpenResty need not reload.
+	 */
+	__uint(max_entries, 131072);
 	__type(key, __u16);   /* destination port (host byte order as in ctx->local_port) */
 	__type(value, __u8);  /* redir_socket sockmap index (0 = primary, 1 = stock TLS fallback) */
 } open_ports SEC(".maps");
