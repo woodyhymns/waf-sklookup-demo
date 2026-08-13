@@ -19,6 +19,8 @@ WAIT="${WAIT:-60s}"
 PIN_DIR="${PIN_DIR:-/sys/fs/bpf/waf-sklookup}"
 # Default: do not send X-Waf-External-Port. Set to 1 for acceptance/debug.
 WAF_EXPOSE_EXTERNAL_PORT="${WAF_EXPOSE_EXTERNAL_PORT:-}"
+# Go remains the default + rollback. Rust: LOADER_BIN=./rust/loader/target/release/waf-sklookup-loader
+LOADER_BIN="${LOADER_BIN:-./waf-sklookup-demo}"
 
 usage() {
   cat <<EOF
@@ -49,6 +51,8 @@ Environment:
   WAIT                       Loader wait for OpenResty listen (default: 60s)
   PIN_DIR                    Pinned BPF maps (default: /sys/fs/bpf/waf-sklookup)
   WAF_EXPOSE_EXTERNAL_PORT   Set to 1 to send X-Waf-External-Port (default: unset/off)
+  LOADER_BIN                 Userspace loader (default: ./waf-sklookup-demo). Rust:
+                             ./rust/loader/target/release/waf-sklookup-loader
 
 Requires: root/CAP_BPF for loader, Linux sk_lookup, curl, openssl, OpenResty 1.19.3.2.
 Product Tengine listen: see openresty/nginx.tengine-https-allow-http.conf.example
@@ -141,9 +145,17 @@ stop_openresty() {
   fi
 }
 
+is_go_loader() {
+  [[ "$(basename "$LOADER_BIN")" == "waf-sklookup-demo" ]]
+}
+
 build_loader() {
-  go generate ./...
-  go build -o waf-sklookup-demo .
+  if is_go_loader; then
+    go generate ./...
+    go build -o waf-sklookup-demo .
+  else
+    cargo build --release --manifest-path rust/loader/Cargo.toml
+  fi
 }
 
 start_loader() {
@@ -153,7 +165,7 @@ start_loader() {
   if [[ -n "${LOADER_TLS_PORTS}" ]]; then
     tls_args=(-tls-target "$TLS_TARGET" -tls-ports "$LOADER_TLS_PORTS")
   fi
-  sudo ./waf-sklookup-demo \
+  sudo "$LOADER_BIN" \
     -mode openresty \
     -target "$TARGET" \
     -ports "$LOADER_PORTS" \
@@ -417,24 +429,28 @@ cmd_verify() {
 }
 
 ensure_loader_bin() {
-  if [[ ! -x ./waf-sklookup-demo ]]; then
+  if [[ ! -x "$LOADER_BIN" ]]; then
     build_loader
+  fi
+  if [[ ! -x "$LOADER_BIN" ]]; then
+    echo "LOADER_BIN not executable: $LOADER_BIN" >&2
+    exit 1
   fi
 }
 
 cmd_add() {
   ensure_loader_bin
-  sudo ./waf-sklookup-demo add -pin-dir "$PIN_DIR" "$@"
+  sudo "$LOADER_BIN" add -pin-dir "$PIN_DIR" "$@"
 }
 
 cmd_remove() {
   ensure_loader_bin
-  sudo ./waf-sklookup-demo remove -pin-dir "$PIN_DIR" "$@"
+  sudo "$LOADER_BIN" remove -pin-dir "$PIN_DIR" "$@"
 }
 
 cmd_list() {
   ensure_loader_bin
-  sudo ./waf-sklookup-demo list -pin-dir "$PIN_DIR" "$@"
+  sudo "$LOADER_BIN" list -pin-dir "$PIN_DIR" "$@"
 }
 
 cmd_bulk() {
@@ -445,7 +461,7 @@ cmd_bulk() {
   fi
   shift
   ensure_loader_bin
-  sudo ./waf-sklookup-demo bulk "$sub" -pin-dir "$PIN_DIR" "$@"
+  sudo "$LOADER_BIN" bulk "$sub" -pin-dir "$PIN_DIR" "$@"
 }
 
 cmd_fill() {
@@ -457,7 +473,7 @@ cmd_fill() {
     exit 1
   fi
   ensure_loader_bin
-  sudo ./waf-sklookup-demo bulk fill -count "$count" -start "$start" -pin-dir "$PIN_DIR"
+  sudo "$LOADER_BIN" bulk fill -count "$count" -start "$start" -pin-dir "$PIN_DIR"
 }
 
 cmd_close_port() {

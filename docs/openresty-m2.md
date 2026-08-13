@@ -4,7 +4,7 @@ Hot-edit the pinned BPF `open_ports` map **without reloading OpenResty** and wit
 re-attaching `sk_lookup`. The long-running Go loader (`-mode openresty` or `toy`)
 must already be up so maps stay pinned under `/sys/fs/bpf/waf-sklookup` (default).
 
-**Go is the reference userspace loader.** A Rust rewrite is only after M3 / perf is OK.
+**Go is the reference userspace loader and rollback.** M3 30K/60K on Go already PASS. Experimental Rust userspace loader (loader-only; C BPF stays): [rust-loader-plan.md](rust-loader-plan.md). Test recipe: [acceptance-m3-rust.md](acceptance-m3-rust.md).
 
 ## Test: 30K / 60K seed (copy-paste)
 
@@ -16,6 +16,8 @@ export CGO_ENABLED=0
 # stock: OPENRESTY_PREFIX=/usr/local/openresty
 # HAH:   OPENRESTY_PREFIX=/usr/local/openresty-hah
 ./run-openresty-demo.sh start    # skip if already up
+# Rust (experimental): export LOADER_BIN=./rust/loader/target/release/waf-sklookup-loader
+# See docs/acceptance-m3-rust.md — not a QPS claim vs Go.
 
 # preferred M3 seed (bulk open)
 ./scripts/m3-fill-ports.sh 30000
