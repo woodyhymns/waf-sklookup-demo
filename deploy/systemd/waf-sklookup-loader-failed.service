@@ -1,0 +1,8 @@
+[Unit]
+Description=Fail closed when the waf-sklookup loader cannot stay running
+Documentation=file:/opt/waf-sklookup-demo/docs/systemd.md
+
+[Service]
+Type=oneshot
+# Deliberately stop the frontend immediately whenever the loader fails.
+ExecStart=/bin/systemctl stop waf-sklookup-openresty.service
