@@ -1,0 +1,72 @@
+=== M3 full Go @ a01b5b2 OPENRESTY_PREFIX=/usr/local/openresty-hah ===
+nginx version: openresty/1.19.3.2
+certs already present: /workspace/waf-sklookup-demo/openresty/certs/demo.crt /workspace/waf-sklookup-demo/openresty/certs/demo.key (FORCE=1 to regenerate)
+Using nginx conf: openresty/nginx.tengine-https-allow-http.conf.example
+nginx: the configuration file /tmp/waf-sklookup-m1/conf/nginx.conf syntax is ok
+nginx: configuration file /tmp/waf-sklookup-m1/conf/nginx.conf test is successful
+OpenResty started (local) nginx version: openresty/1.19.3.2 prefix=/tmp/waf-sklookup-m1/runtime config=/tmp/waf-sklookup-m1/conf/nginx.conf expose=off
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfel.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfel.go
+Compiled /workspace/waf-sklookup-demo/dispatch_bpfeb.o
+Wrote /workspace/waf-sklookup-demo/dispatch_bpfeb.go
+Loader PID 236481
+Run './run-openresty-demo.sh verify' to check steered HTTP/HTTPS ports.
+Default: X-Waf-External-Port is hidden. Restart with WAF_EXPOSE_EXTERNAL_PORT=1 to expose it.
+loader_pid=236481
+OpenResty M1 OK
+waf_external_port=5000
+server_port=8080
+scheme=http
+remote_addr=
+STEP want=1 have=1 loader_rss=7024kB or_rss=9916kB qps=102 cpu=0 note=baseline_after_start
+  map: 197: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 1024  memlock 83648B 	btf_id 158 201: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 131072  memlock 10487488B 	btf_id 167 
+=== fill 30000 ===
+M3 fill: count=30000 start=5000 pin=/sys/fs/bpf/waf-sklookup (no OpenResty reload)
+M3 fill: count=30000 start=5000 skip="8080,8443" pin=/sys/fs/bpf/waf-sklookup (no OpenResty reload)
+add 4096/30000 (13.7%) elapsed=1ms rate=3052796/s
+add 8192/30000 (27.3%) elapsed=3ms rate=3168884/s
+add 12288/30000 (41.0%) elapsed=4ms rate=3448565/s
+add 16384/30000 (54.6%) elapsed=5ms rate=3549839/s
+add 20480/30000 (68.3%) elapsed=6ms rate=3676219/s
+add 24576/30000 (81.9%) elapsed=7ms rate=3641731/s
+add 28672/30000 (95.6%) elapsed=8ms rate=3557435/s
+add 30000/30000 (100.0%) elapsed=8ms rate=3539871/s
+added n=30000 slot=0 (primary) elapsed=8ms method=batch
+count=30000
+STEP want=30000 have=30000 loader_rss=7024kB or_rss=10780kB qps=100 cpu=0 note=after_bulk_30k
+  map: 197: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 1024  memlock 83648B 	btf_id 158 201: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 131072  memlock 10487488B 	btf_id 167 
+=== fill 60000 (overwrite/extend to 60k from 5000) ===
+M3 fill: count=60000 start=5000 pin=/sys/fs/bpf/waf-sklookup (no OpenResty reload)
+M3 fill: count=60000 start=5000 skip="8080,8443" pin=/sys/fs/bpf/waf-sklookup (no OpenResty reload)
+add 4096/60000 (6.8%) elapsed=2ms rate=2566389/s
+add 8192/60000 (13.7%) elapsed=3ms rate=2766644/s
+add 12288/60000 (20.5%) elapsed=4ms rate=2907206/s
+add 16384/60000 (27.3%) elapsed=5ms rate=3022793/s
+add 20480/60000 (34.1%) elapsed=6ms rate=3151058/s
+add 24576/60000 (41.0%) elapsed=7ms rate=3285748/s
+add 28672/60000 (47.8%) elapsed=8ms rate=3404748/s
+add 32768/60000 (54.6%) elapsed=10ms rate=3441892/s
+add 36864/60000 (61.4%) elapsed=11ms rate=3476630/s
+add 40960/60000 (68.3%) elapsed=12ms rate=3532308/s
+add 45056/60000 (75.1%) elapsed=13ms rate=3599516/s
+add 49152/60000 (81.9%) elapsed=13ms rate=3655594/s
+add 53248/60000 (88.7%) elapsed=14ms rate=3709005/s
+add 57344/60000 (95.6%) elapsed=15ms rate=3743495/s
+add 60000/60000 (100.0%) elapsed=16ms rate=3766146/s
+added n=60000 slot=0 (primary) elapsed=16ms method=batch
+count=60000
+STEP want=60000 have=60000 loader_rss=7024kB or_rss=10784kB qps=85 cpu=0 note=after_bulk_60k
+  map: 197: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 1024  memlock 83648B 	btf_id 158 201: hash  name open_ports  flags 0x0 	key 2B  value 1B  max_entries 131072  memlock 10487488B 	btf_id 167 
+probe high port 34999
+http_code=200
+
+=== SHORT TABLE ===
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| 1 ports | RSS loader/OR · have · QPS · CPU | 7024/9916 kB · 1 · 102 · 0 (baseline_after_start) |
+| 30000 ports | RSS loader/OR · have · QPS · CPU | 7024/10780 kB · 30000 · 100 · 0 (after_bulk_30k) |
+| 60000 ports | RSS loader/OR · have · QPS · CPU | 7024/10784 kB · 60000 · 85 · 0 (after_bulk_60k) |
+| map | open_ports | max_entries 1024 |
+| tip | git | a01b5b2 |
+| Rust | | DEFER |
+CSV=docs/acceptance-m3-ladder-last.csv LOG=docs/acceptance-m3-full-run.log

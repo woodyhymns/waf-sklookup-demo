@@ -179,7 +179,7 @@ See [docs/repro.md](repro.md) for the original kernel-steering pack.
 
 ## Out of scope (this PR)
 
-- M2 hot-add API / control plane push
+- M2 hot-add API / control plane — **done in M2** ([openresty-m2.md](openresty-m2.md)); this M1 doc stays HTTP-wiring only
 - M3 performance / memory-vs-port-scale matrix ([docs/acceptance-m3.md](acceptance-m3.md))
 - OpenResty reload sockmap re-registration automation
 - Full TLS parity on stock 1.19.3.2 as a single listen (requires Tengine `https_allow_http`; see P1)
