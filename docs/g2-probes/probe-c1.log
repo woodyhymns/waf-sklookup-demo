@@ -1,0 +1,15 @@
+probe first=A mode=keepalive N=5 c=1 d=20s
+started=2026-08-13T02:40:41Z
+--- A block ---
+RESULT label=A-c1-s1 mode=keepalive url=http://127.0.0.1:8080/ c=1 d=20s warmup=3s wall=20s ok=37495 fail=0 total=37495 rps=1874.7 p50_us=497 p90_us=887 p99_us=1301 max_us=5698 bytes=3374550
+RESULT label=A-c1-s2 mode=keepalive url=http://127.0.0.1:8080/ c=1 d=20s warmup=3s wall=20s ok=25244 fail=0 total=25244 rps=1262.2 p50_us=739 p90_us=1374 p99_us=1928 max_us=3805 bytes=2271960
+RESULT label=A-c1-s3 mode=keepalive url=http://127.0.0.1:8080/ c=1 d=20s warmup=3s wall=20s ok=21755 fail=0 total=21755 rps=1087.7 p50_us=841 p90_us=1561 p99_us=2201 max_us=3853 bytes=1957950
+RESULT label=A-c1-s4 mode=keepalive url=http://127.0.0.1:8080/ c=1 d=20s warmup=3s wall=20s ok=23629 fail=0 total=23629 rps=1181.4 p50_us=790 p90_us=1434 p99_us=1987 max_us=5180 bytes=2126610
+RESULT label=A-c1-s5 mode=keepalive url=http://127.0.0.1:8080/ c=1 d=20s warmup=3s wall=20.001s ok=25263 fail=0 total=25263 rps=1263.1 p50_us=749 p90_us=1346 p99_us=1944 max_us=5461 bytes=2273670
+--- B block ---
+RESULT label=B-c1-s1 mode=keepalive url=http://127.0.0.1:18081/ c=1 d=20s warmup=3s wall=20s ok=24402 fail=0 total=24402 rps=1220.1 p50_us=802 p90_us=1355 p99_us=1945 max_us=3847 bytes=2220582
+RESULT label=B-c1-s2 mode=keepalive url=http://127.0.0.1:18081/ c=1 d=20s warmup=3s wall=20s ok=24201 fail=0 total=24201 rps=1210.0 p50_us=782 p90_us=1387 p99_us=2016 max_us=4263 bytes=2202291
+RESULT label=B-c1-s3 mode=keepalive url=http://127.0.0.1:18081/ c=1 d=20s warmup=3s wall=20s ok=23713 fail=0 total=23713 rps=1185.6 p50_us=793 p90_us=1372 p99_us=1930 max_us=5394 bytes=2157883
+RESULT label=B-c1-s4 mode=keepalive url=http://127.0.0.1:18081/ c=1 d=20s warmup=3s wall=20s ok=23838 fail=0 total=23838 rps=1191.9 p50_us=790 p90_us=1399 p99_us=2118 max_us=6167 bytes=2169258
+RESULT label=B-c1-s5 mode=keepalive url=http://127.0.0.1:18081/ c=1 d=20s warmup=3s wall=20s ok=22392 fail=0 total=22392 rps=1119.6 p50_us=883 p90_us=1436 p99_us=2003 max_us=4221 bytes=2037672
+SUMMARY first=A mode=keepalive medA_p99_us=1944 medB_p99_us=2003 ratio=1.0303 A_samples=1301 1928 2201 1987 1944 B_samples=1945 2016 1930 2118 2003

@@ -230,12 +230,14 @@ Baseline: HTTP A-then-B keepalive rel=**1.2897** (medA=9334 medB=12038).
 | 1 | **B-then-A keepalive** | 19329 | 10879 | **0.5628** | Sign **flipped**. Later block slower. **H_order**, not a fixed path tax. |
 | 2 | **short-conn A-then-B** (no keepalive) | 216561 | 271028 | **1.2515** | Rel still Fail (~1.25). Not keepalive-only. (p99 is connect-bound, hundreds of ms.) |
 | 3 | **stub resolve() A-then-B keepalive** (constant `"18081"`, no `/proc` scan) | 513 | 686 | **1.3372** | Abs **~19ms to ~0.5ms**; ratio still ~1.34. Lua is **abs amplifier**, **not rel root**. |
+| 4 | **c=1 keepalive A-then-B** | 1944 | 2003 | **1.0303** | **Pass** vs 1.05 (c=8 was 1.2897 Fail). fail=0 on 10 shots. Contention/queue at c=8 on wp=1, not a fixed path tax. |
+
 
 Logs in-tree: [g2-probes/probe-summary.txt](g2-probes/probe-summary.txt), [probe-b-then-a.log](g2-probes/probe-b-then-a.log), [probe-short.log](g2-probes/probe-short.log), [probe-stub-resolve.log](g2-probes/probe-stub-resolve.log).
 
 Test official three-line labels (same numbers): (1) A-A/B-B keepalive = baseline **1.2897**; (2) B-B/A-A keepalive = **0.5628** sign flip; (3) stub-resolve = **1.3372**. c=1 cancelled. Short-conn 1.2515 remains extra evidence.
 
-**Implication:** do **not** treat PR #10 getsockname-first as the G2 rel fix (abs hygiene only). Rel Fail is dominated by **block order / thermal** on a tight **H_gate**. Hold merge. Next optional: A-A/B-B stability + CPU pin (M5), not another full marathon.
+c=1 A-then-B keepalive ratio=**1.0303** (medA=1944 medB=2003, fail=0). Official G2 stays **c=8**; do not green-bar by dropping concurrency. **Implication:** do **not** treat PR #10 getsockname-first as the G2 rel fix (abs hygiene only). Rel Fail is dominated by **block order / thermal** on a tight **H_gate**. Hold merge. Next optional: A-A/B-B stability + CPU pin (M5), not another full marathon.
 
 ---
 
