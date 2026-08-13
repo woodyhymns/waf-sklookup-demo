@@ -16,7 +16,8 @@ use crate::pin::{self, DEFAULT_BULK_BATCH, DEFAULT_PIN_DIR, REDIR_PRIMARY, REDIR
 use crate::ports::{self, collect_bulk_ports, generate_fill_ports, parse_skip_set};
 
 pub const CTL_USAGE: &str = "\
-M2 control plane (pinned open_ports; no OpenResty reload):
+Product control plane is the Unix socket (`ctl` / /run/waf-sklookup/ctl.sock).
+Root CLI escape hatch (pinned open_ports; no OpenResty reload):
 
   sudo ./waf-sklookup-loader add|open PORT|START-END [-range A-B] [-file F] [-stdin]
   sudo ./waf-sklookup-loader remove|close PORT|START-END [-range A-B] [-file F] [-stdin]
@@ -38,7 +39,8 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
     if args.is_empty() {
         bail!("{}", CTL_USAGE.trim());
     }
-    match args[0].as_str() {
+    let mutation = matches!(args[0].as_str(), "add"|"open"|"remove"|"close"|"load-ports"|"close-ports"|"bulk"|"reconcile"|"apply");
+    let result = match args[0].as_str() {
         "add" | "open" => ctl_add(&args[1..]),
         "remove" | "close" => ctl_remove(&args[1..]),
         "list" | "dump" => ctl_list(&args[1..]),
@@ -51,7 +53,21 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
             Ok(())
         }
         other => bail!("unknown command {other:?}\n{CTL_USAGE}"),
+    };
+    if mutation {
+        let cred = crate::sockctl::PeerCred { pid: std::process::id() as i32, uid: unsafe { libc::getuid() }, gid: unsafe { libc::getgid() } };
+        let detail = if args.len() > 1 { args[1..].join(",") } else { "none".into() };
+        eprintln!("{} audit uid={} gid={} pid={} op={} ports={} ok={}", crate::log_prefix(),
+            cred.uid, cred.gid, cred.pid, args[0], detail, result.is_ok());
     }
+    result
+}
+
+pub fn enforce_ladder(ports: &[u16], explicit: bool) -> Result<()> {
+    if ports.len() > 10_000 && !explicit && std::env::var("M3_FULL_LADDER").as_deref() != Ok("1") {
+        bail!("{} ports in one operation is disabled; set M3_FULL_LADDER=1 or use -full-ladder", ports.len());
+    }
+    Ok(())
 }
 
 fn ctl_slot(tls: bool) -> u8 {
@@ -77,7 +93,7 @@ fn maybe_help(flags: &ParsedFlags) -> bool {
 fn ctl_add(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
-        &["tls", "stdin", "help", "no-file"],
+        &["tls", "stdin", "help", "no-file", "full-ladder"],
         &["pin-dir", "ports-file", "range", "file"],
     )?;
     if maybe_help(&flags) {
@@ -97,6 +113,7 @@ fn ctl_add(args: &[String]) -> Result<()> {
             return Err(err);
         }
     };
+    enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
     apply_add(
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
@@ -112,7 +129,7 @@ fn ctl_add(args: &[String]) -> Result<()> {
 fn ctl_remove(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
-        &["stdin", "help", "no-file"],
+        &["stdin", "help", "no-file", "full-ladder"],
         &["pin-dir", "ports-file", "range", "file"],
     )?;
     if maybe_help(&flags) {
@@ -132,6 +149,7 @@ fn ctl_remove(args: &[String]) -> Result<()> {
             return Err(err);
         }
     };
+    enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
     apply_remove(
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
@@ -167,7 +185,7 @@ fn ctl_bulk(args: &[String]) -> Result<()> {
 fn ctl_bulk_add(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
-        &["tls", "stdin", "quiet", "help", "no-file"],
+        &["tls", "stdin", "quiet", "help", "no-file", "full-ladder"],
         &["pin-dir", "ports-file", "range", "file", "batch"],
     )?;
     if maybe_help(&flags) {
@@ -175,6 +193,7 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
         return Ok(());
     }
     let ports = collect_from_flags(&flags)?;
+    enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
     let batch = parse_batch(flags.get("batch"))?;
     apply_add(
         &pin_dir_of(&flags),
@@ -191,7 +210,7 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
 fn ctl_bulk_remove(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
-        &["stdin", "quiet", "help", "no-file"],
+        &["stdin", "quiet", "help", "no-file", "full-ladder"],
         &["pin-dir", "ports-file", "range", "file", "batch"],
     )?;
     if maybe_help(&flags) {
@@ -199,6 +218,7 @@ fn ctl_bulk_remove(args: &[String]) -> Result<()> {
         return Ok(());
     }
     let ports = collect_from_flags(&flags)?;
+    enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
     let batch = parse_batch(flags.get("batch"))?;
     apply_remove(
         &pin_dir_of(&flags),
@@ -214,7 +234,7 @@ fn ctl_bulk_remove(args: &[String]) -> Result<()> {
 fn ctl_bulk_fill(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
-        &["tls", "quiet", "help", "no-file"],
+        &["tls", "quiet", "help", "no-file", "full-ladder"],
         &["pin-dir", "ports-file", "count", "start", "skip", "batch"],
     )?;
     if maybe_help(&flags) {
@@ -237,6 +257,7 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
     let skip_raw = flags.get("skip").unwrap_or("8080,8443");
     let skip = parse_skip_set(skip_raw)?;
     let ports = generate_fill_ports(start as u16, count, &skip)?;
+    enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
     let batch = parse_batch(flags.get("batch"))?;
     let pin = pin_dir_of(&flags);
     eprint!(
@@ -271,7 +292,7 @@ fn collect_from_flags(flags: &ParsedFlags) -> Result<Vec<u16>> {
     )
 }
 
-fn apply_add(
+pub(crate) fn apply_add(
     pin_dir: &Path,
     ports_file: &Path,
     ports: &[u16],
@@ -307,7 +328,7 @@ fn apply_add(
     Ok(())
 }
 
-fn apply_remove(
+pub(crate) fn apply_remove(
     pin_dir: &Path,
     ports_file: &Path,
     ports: &[u16],
@@ -426,7 +447,7 @@ fn desired_or_current(path: &Path, map: &impl MapCore) -> Result<DesiredPorts> {
     }
 }
 
-fn ctl_reconcile(args: &[String]) -> Result<()> {
+pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(args, &["quiet", "help"], &["pin-dir", "ports-file", "batch"])?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");

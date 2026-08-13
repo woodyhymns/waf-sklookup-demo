@@ -10,6 +10,7 @@ mod load;
 mod openresty;
 mod pin;
 mod ports;
+mod sockctl;
 mod toy;
 
 #[allow(clippy::wildcard_imports, dead_code, unused_imports, non_snake_case)]
@@ -30,6 +31,10 @@ use cli::{LongRunningArgs, RunMode};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("ctl") {
+        if let Err(err) = sockctl::run_client(&args[2..]) { fatal(&format!("{err:#}")); }
+        return;
+    }
     if args.len() > 1 && cli::is_ctl_command(&args[1]) {
         if let Err(err) = ctl::run_ctl(&args[1..]) {
             fatal(&format!("{err:#}"));
@@ -163,6 +168,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let reload = Arc::new(AtomicBool::new(false));
+    let mutations = Arc::new(std::sync::Mutex::new(()));
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
     signal_hook::flag::register(signal_hook::consts::SIGQUIT, Arc::clone(&shutdown))?;
@@ -216,8 +222,33 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         args.ports_file.display()
     ));
 
+    let _ctl_server = match args.ctl_sock.clone() {
+        Some(path) => match sockctl::start(
+            path.clone(),
+            args.ctl_group,
+            args.pin_dir.clone(),
+            args.ports_file.clone(),
+            Arc::clone(&shutdown),
+            Arc::clone(&mutations),
+        ) {
+            Ok(server) => Some(server),
+            Err(err) => {
+                log_msg(format_args!(
+                    "control socket disabled (could not bind {}): {err:#}",
+                    path.display()
+                ));
+                None
+            }
+        },
+        None => {
+            log_msg(format_args!("control socket disabled"));
+            None
+        }
+    };
+
     while !shutdown.load(Ordering::SeqCst) {
         if reload.swap(false, Ordering::SeqCst) {
+            let _guard = mutations.lock().map_err(|_| anyhow::anyhow!("mutation lock poisoned"))?;
             match desired::load(&args.ports_file)
                 .and_then(|state| desired::reconcile_map(&skel.maps.open_ports, &state))
             {

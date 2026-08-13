@@ -1,5 +1,11 @@
 # M2: port control plane (hot add/remove, bulk seed)
 
+The product interface is JSON-lines over `/run/waf-sklookup/ctl.sock`; there is no public HTTP or TCP API. The socket is mode `0660`. Filesystem permissions and Linux `SO_PEERCRED` admit only root, the socket owner, or socket group, and the loader refuses any world permission bits. Use `-ctl-group GID` for group ownership, `-ctl-sock`/`CTL_SOCK` to override the path, or `-no-ctl`/an empty path to disable it.
+
+Use `waf-sklookup-loader ctl [-sock PATH] list|add|remove|reconcile|bulk ...`. Socket and SIGHUP mutations share a lock. Every mutation emits a timestamped stderr audit record with peer uid/gid/pid, operation, compact port detail, and `ok=true|false`. The top-level pinned-map commands remain a root operations escape hatch, not the product API.
+
+Socket and direct CLI add/bulk/fill operations above 10,000 ports require `M3_FULL_LADDER=1` or explicit `full_ladder: true` / `-full-ladder`.
+
 The long-running Rust loader pins `open_ports` under `/sys/fs/bpf/waf-sklookup` by default. The repository-root `ports.conf` is the desired state: plain ports use the primary slot and an optional trailing `tls` selects the stock TLS-fallback slot. Comma lists, `START-END`, blank lines, and `#` comments are supported. Use `-ports-file PATH` to select another file.
 
 Startup reconciles the map exactly to the file. If it does not exist, the backward-compatible `-ports` and `-tls-ports` flags seed it. A second invocation can edit the pinned map without reloading OpenResty or re-attaching `sk_lookup`; every add/remove/bulk mutation also atomically rewrites the desired file so a later reconcile cannot undo it. Pass `-no-file` to mutate the live map only (used by stop/hygiene and M3 fill helpers so they cannot empty `ports.conf`).
@@ -9,6 +15,13 @@ make build
 ./run-openresty-demo.sh start
 
 LOADER=./rust/loader/target/release/waf-sklookup-loader
+# product control plane (Unix socket)
+"$LOADER" ctl list
+"$LOADER" ctl add 18083
+"$LOADER" ctl remove 18083
+"$LOADER" ctl reconcile
+
+# root CLI escape hatch (pinned maps)
 sudo "$LOADER" add 18083
 sudo "$LOADER" remove 18083
 sudo "$LOADER" list
