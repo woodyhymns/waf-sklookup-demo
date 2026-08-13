@@ -1,4 +1,5 @@
 .PHONY: generate build run run-toy run-openresty verify-openresty stop-openresty test clean certs \
+	httpbench rust-loader rust-loader-test \
 	httpbench accept-prod-p0 accept-prod-p0-cps-tls accept-prod-p0-long-p99 \
 	accept-prod-p0-loader-lifecycle accept-prod-p0-hot-ports \
 	accept-prod-p1 accept-prod-p1-map-bytes accept-prod-p1-reuseport \
@@ -19,6 +20,14 @@ httpbench:
 
 test: generate
 	go test ./...
+
+# Experimental Rust userspace loader (C BPF unchanged). Go remains default.
+# rustc 1.85+ (rust/loader/rust-toolchain.toml). Does not replace `make build`.
+rust-loader:
+	cargo build --release --manifest-path rust/loader/Cargo.toml
+
+rust-loader-test:
+	cargo test --manifest-path rust/loader/Cargo.toml
 
 certs:
 	chmod +x openresty/certs/gen-demo-certs.sh
@@ -131,3 +140,4 @@ accept-prod-g6: httpbench build
 clean:
 	rm -f waf-sklookup-demo dispatch_bpfel.go dispatch_bpfel.o dispatch_bpfeb.go dispatch_bpfeb.o
 	rm -f bin/httpbench
+	rm -rf rust/loader/target
