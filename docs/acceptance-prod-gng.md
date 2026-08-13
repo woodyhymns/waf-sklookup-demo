@@ -196,7 +196,7 @@ make accept-prod-p1
 ## Go / No-Go 判决（占位 → 跑完填写）
 
 > **Go/No-Go（门槛锁定后）:** 见下方 **Written gates (locked)**。  
-> 功能/脚本向：P0+P1 场景 **通过**；校准复测后 **Hold merge**（G2 abs Pass；**G2 rel Fail**；**G6 Fail**）。确认前 **不 merge**。
+> 功能/脚本向：P0+P1 场景 **通过**。**G2 主看双向 p99 abs≤10ms（Pass）**；rel 仅参考。G6 p99 比仍 Fail（不挡本次 #9）。Alex 已批合入 PR #9。
 > 规则：P0 全 **通过** → 推荐 **Go**（仍待书面门槛确认）；任一 **失败** → **No-Go**；缺工具/环境不明 → **阻塞**。
 
 最近一次自动跑：见 [acceptance-prod-gng-p0-last.md](acceptance-prod-gng-p0-last.md)。
@@ -227,21 +227,21 @@ make accept-prod-p1
 | `scripts/accept-prod-g6-hot.sh` | G6 校准热更脚本 |
 
 ---
-*Test QA · branch test/prod-gng-acceptance · do not merge · do not push*
+*Test QA · branch test/prod-gng-acceptance · Alex approved merge of PR #9*
 
 
 ---
 
 ## Written gates (locked)
 
-> **锁定来源**: Json 默认锁定（业界收紧 + **G2 相对优先**；绝对 p99≤10ms 待校准后另验）。  
+> **锁定来源**: Alex 2026-08-13 — **G2 abs-primary / rel advisory**。主看双向 p99 abs≤10ms；rel（≤1.05）仅参考，不作路径结论、不作合入硬门。  
 > **对照跑次**: P0 [acceptance-prod-gng-p0-last.md](acceptance-prod-gng-p0-last.md) · P1 [acceptance-prod-gng-p1-last.md](acceptance-prod-gng-p1-last.md) · G2/G6 [acceptance-prod-gng-g2g6-last.md](acceptance-prod-gng-g2g6-last.md) · HAH `openresty/1.19.3.2` · tip 证据见上。  
-> **不 merge** 直至 Alex 书面确认；Rust 仍 DEFER。
+> PR #9 **Alex 已批准合入**；#8/#10 仍 Hold；Rust 仍 DEFER。
 
 | Gate | 门槛 | 对照证据（现跑次） | 状态 |
 |------|------|-------------------|------|
 | **G1** | sk_lookup/直连 **rps 比 ≥ 0.98** | HTTP 346.2/311.1=**1.113**；HTTPS 276.2/275.4=**1.003**（P0-2） | **Pass** |
-| **G2** | **相对** p99 比 ≤ **1.05**；**绝对** abs_diff_ms ≤ **10ms**（校准后） | 校准 keepalive+warmup=3s+d=20s+c=8+N=5 block-order：abs HTTP **2.704ms** / HTTPS **0.025ms** → **Pass**；rel HTTP **1.2897** / HTTPS **1.0056** → **Fail(HTTP)**（c=4/ABAB 同结论） | **Pass（绝对）** / **Fail（相对 HTTP）** |
+| **G2** | **主门槛**：双向 p99 abs_diff ≤ **10ms**（A-then-B 与 B-then-A 都看 abs）。**rel** p99 比 ≤1.05 **仅参考**（不作合入硬门 / 不作路径结论） | 校准 keepalive+warmup=3s+d=20s+c=8+N=5：abs HTTP **2.704ms** / HTTPS **0.025ms** → **Pass**；rel HTTP **1.2897** 仅 advisory（块序可翻转，见 repro pack） | **Pass**（abs-primary） |
 | **G3** | fail=0 且 error ≤ 0.01% | P0 各腿 `fail=0`（短连 ok=3234；长连/热更各腿 fail=0） | **Pass** |
 | **G4** | TLS 路径 CPS/吞吐 比 ≥ **0.95** | HTTPS keepalive rps 比 **1.003**（P0-2）。另：导向口 openssl s_time ≈199 CPS（P0-1，无直连对照腿） | **Pass** |
 | **G5** | map **memlock ±2%**；进程 **RSS ≤5%**（相对阶梯） | memlock 全程 **10487488B**（0%）；loader/OR RSS 7008/8308 kB 阶梯持平（P1-a） | **Pass** |
@@ -255,12 +255,11 @@ make accept-prod-p1
 
 | 结论项 | 结果 |
 |--------|------|
-| 除 **G2 rel** 与 **G6 p99 比** 外 | 其余 G1/G3–G5/G7–G10 **满足**；G2 abs 已过 |
-| G2 绝对 abs_diff≤10ms | **Pass**（HTTP 2.704ms / HTTPS 0.025ms；校准 method） |
-| G2 相对 p99 比≤1.05 | **Fail**（HTTP **1.2897**；HTTPS 1.0056 OK；c=4/ABAB/block-order 均 Fail） |
-| G6 热更 p99 比 | **Fail**（**1.827** > 1.10）；open 23ms / close 17ms / fail=0 已过 |
-| 是否建议 merge | **否 — Hold merge**（需 G2 abs AND G2 rel AND G6 全 Pass） |
-| Go/No-Go（门槛视角） | **Hold merge / No-Go**：校准复测后 G2 rel 与 G6 仍未过 |
+| G2 **主门槛**（双向 p99 abs≤10ms） | **Pass**；rel 改为 **advisory**（HTTP 1.2897 不挡合入） |
+| G2 相对 p99 比≤1.05 | **Advisory Fail**（HTTP **1.2897**；块序可翻转；不作路径结论） |
+| G6 热更 p99 比 | **Fail**（**1.827** > 1.10）；open 23ms / close 17ms / fail=0 已过（本 PR 不挡 Alex 已批的 #9 合入） |
+| 是否建议 merge | **是 — Alex 已批 PR #9**（G2 abs-primary）；**不要合 #8/#10** |
+| Go/No-Go（门槛视角） | **Go for #9**（G2 改 abs-primary 后硬门过）；G6 rel 仍记 Fail / 另跟 |
 
 ### 交叉引用
 

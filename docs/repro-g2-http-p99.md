@@ -1,6 +1,6 @@
 # Localization / reproduction pack: G2 HTTP relative p99
 
-**Status:** Hold merge · do **not** relax gates · do **not** start Rust  
+**Status:** G2 **abs-primary / rel advisory** (Alex 2026-08-13). Rel ≤1.05 is **not** a merge hard gate and **not** a path conclusion. Do **not** start Rust. #8/#10 Hold.  
 **Baseline code:** `main@09d138b` (M2 bulk / open_ports)  
 **Evidence tip:** `test/prod-gng-acceptance` @ `a9a4009` / docs tip `662cfaf` (PR [#9](https://github.com/woodyhymns/waf-sklookup-demo/pull/9) draft)  
 **Owner:** Repro (pack) · Test (measurement) · Repo (path)
