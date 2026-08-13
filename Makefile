@@ -6,25 +6,22 @@
 	accept-prod-p1-waf-port-path accept-prod-p1-rollback \
 	accept-prod-g2 accept-prod-g6
 
-export CGO_ENABLED=0
+LOADER_BIN ?= ./rust/loader/target/release/waf-sklookup-loader
 
-generate:
-	go generate ./...
+generate: build
 
-build: generate
-	go build -o waf-sklookup-demo .
+build:
+	cargo build --release --manifest-path rust/loader/Cargo.toml
 
 httpbench:
 	mkdir -p bin
 	go build -o bin/httpbench ./tools/httpbench
 
-test: generate
-	go test ./...
+test:
+	cargo test --manifest-path rust/loader/Cargo.toml
 
-# Experimental Rust userspace loader (C BPF unchanged). Go remains default.
-# rustc 1.85+ (rust/loader/rust-toolchain.toml). Does not replace `make build`.
-rust-loader:
-	cargo build --release --manifest-path rust/loader/Cargo.toml
+# Rust userspace loader (C BPF unchanged); rustc 1.85+.
+rust-loader: build
 
 rust-loader-test:
 	cargo test --manifest-path rust/loader/Cargo.toml
@@ -34,7 +31,7 @@ certs:
 	./openresty/certs/gen-demo-certs.sh
 
 run: build
-	sudo ./waf-sklookup-demo -mode toy -listen 127.0.0.1:18080 -ports 18081,18082,65500
+	sudo $(LOADER_BIN) -mode toy -listen 127.0.0.1:18080 -ports 18081,18082,65500
 
 run-toy: run
 

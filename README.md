@@ -15,13 +15,12 @@ bpftool feature 2>/dev/null | grep -i sk_lookup   # optional; expect sk_lookup s
 
 # 1) Deps (Debian/Ubuntu)
 sudo apt-get update
-sudo apt-get install -y clang llvm libbpf-dev linux-libc-dev golang-go
+sudo apt-get install -y rustc cargo clang llvm libbpf-dev libelf-dev linux-libc-dev
 # optional: linux-tools-common / linux-tools-$(uname -r) for bpftool
 
 # 2) Build & run (needs root for BPF attach)
 git clone https://github.com/woodyhymns/waf-sklookup-demo.git
 cd waf-sklookup-demo
-go mod download
 ./run.sh
 # same as: make run
 # default: listen 127.0.0.1:18080 ; steered ports 18081,18082,65500
@@ -84,7 +83,7 @@ QA fills the checkboxes in **[docs/acceptance-m1.md](docs/acceptance-m1.md)** af
 
 ```
 Client → :18081 / :18082 / :65500  ──sk_lookup──►  fixed internal listen(s)
-         toy: Go HTTP on :18080
+         toy: Rust HTTP on :18080
          product (Tengine): OpenResty 127.0.0.1:8080 ssl https_allow_http  (HTTP+TLS)
          stock 1.19.3.2 fallback: 127.0.0.1:8080 HTTP + 127.0.0.1:8443 ssl
 ```
@@ -95,36 +94,33 @@ Client → :18081 / :18082 / :65500  ──sk_lookup──►  fixed internal li
 
 ## M2: port control plane
 
-While the loader is up (maps pinned), a second invocation of the **same Go binary** edits `open_ports`. OpenResty is not reloaded; the BPF program is not re-attached.
+While the loader is up (maps pinned), a second invocation of the same Rust binary edits `open_ports`. OpenResty is not reloaded; the BPF program is not re-attached.
 
 ```bash
-sudo ./waf-sklookup-demo add 18083
-sudo ./waf-sklookup-demo remove 18083
-sudo ./waf-sklookup-demo list
-sudo ./waf-sklookup-demo bulk open  -range 5000-34999          # file/stdin also
-sudo ./waf-sklookup-demo bulk close -range 5000-34999
-sudo ./waf-sklookup-demo bulk fill -count 30000 -start 5000   # M3 30K seed
+sudo ./rust/loader/target/release/waf-sklookup-loader add 18083
+sudo ./rust/loader/target/release/waf-sklookup-loader remove 18083
+sudo ./rust/loader/target/release/waf-sklookup-loader list
+sudo ./rust/loader/target/release/waf-sklookup-loader bulk open  -range 5000-34999
+sudo ./rust/loader/target/release/waf-sklookup-loader bulk close -range 5000-34999
+M3_FULL_LADDER=1 sudo ./rust/loader/target/release/waf-sklookup-loader bulk fill -count 30000 -start 5000
 ./scripts/m3-fill-ports.sh 60000                               # M3 60K seed
 ```
 
-Details, file/stdin input, map ceiling (**131072**, ~8–16 MB memlock), and HAH/`OPENRESTY_PREFIX` notes: [docs/openresty-m2.md](docs/openresty-m2.md). **This bulk path is what Test will use for M3.** The old `max_entries=1024` map cannot hold a 30K/60K ladder. Go remains the reference loader and rollback. Experimental Rust userspace loader (C BPF unchanged): [docs/rust-loader-plan.md](docs/rust-loader-plan.md) · Test recipe: [docs/acceptance-m3-rust.md](docs/acceptance-m3-rust.md).
+Details, file/stdin input, map ceiling (**131072**, ~8–16 MB memlock), and HAH/`OPENRESTY_PREFIX` notes: [docs/openresty-m2.md](docs/openresty-m2.md). The Rust userspace loader is the default; the C BPF program is unchanged. Design history: [docs/rust-loader-plan.md](docs/rust-loader-plan.md) · Test recipe: [docs/acceptance-m3-rust.md](docs/acceptance-m3-rust.md).
 
-## Experimental Rust userspace loader
+## Rust userspace loader
 
-**Experimental.** Same C BPF (`dispatch.bpf.c`). Not the default. **Not** a QPS/P99 claim versus Go — the kernel program is unchanged. Isolated steering tax is an **absolute** A vs B delta (direct `:8080` vs steered port), not a G2 keepalive relative ratio.
+Rust is the default userspace loader. It uses the same C BPF (`dispatch.bpf.c`), so the userspace rewrite alone is not a QPS/P99 claim. Isolated steering tax is an **absolute** A vs B delta (direct `:8080` vs steered port), not a G2 keepalive relative ratio.
 
 ```bash
-make rust-loader
-export LOADER_BIN=./rust/loader/target/release/waf-sklookup-loader
+make build
 ./run-openresty-demo.sh start
-./scripts/m3-fill-ports.sh 30000
-./scripts/m3-fill-ports.sh 60000
-# rollback
-export LOADER_BIN=./waf-sklookup-demo
-./run-openresty-demo.sh start
+./scripts/m3-fill-ports.sh 100
+./scripts/m3-fill-ports.sh 1000
+./scripts/m3-fill-ports.sh 10000
 ```
 
-Do not run Go and Rust loaders in the same netns. Details: [docs/acceptance-m3-rust.md](docs/acceptance-m3-rust.md).
+`LOADER_BIN` remains overridable. Details: [docs/acceptance-m3-rust.md](docs/acceptance-m3-rust.md).
 
 
 ## Requirements
@@ -133,35 +129,35 @@ Do not run Go and Rust loaders in the same netns. Details: [docs/acceptance-m3-r
 |------|--------|
 | Linux + `sk_lookup` | Kernel ≥ 5.9; HCE 2.0 / 5.10 OK. Confirm with `uname -r` / `bpftool feature` |
 | Privileges | Root, or `CAP_BPF` + `CAP_NET_ADMIN` (and usually ability to attach to current netns) |
-| Build tools | Go **1.22+**, clang, linux headers (`linux-libc-dev`). `CGO_ENABLED=0`. Optional Rust loader: rustc **1.85+**, `libelf-dev` |
+| Build tools | rustc **1.85+**, Cargo, clang, libbpf/libelf development packages, and Linux headers. Go **1.22+** is optional and only builds `tools/httpbench`. |
 | OpenResty (M1) | **1.19.3.2** — `openresty/openresty:1.19.3.2-bionic` or a local prefix |
 | Network | Demo listens on **loopback**; run on a host/VM where BPF attach is allowed |
 
 ```bash
 # Debian/Ubuntu example
-sudo apt-get install -y clang llvm libbpf-dev linux-libc-dev golang-go
+sudo apt-get install -y rustc cargo clang llvm libbpf-dev libelf-dev linux-libc-dev
 ```
 
-`./run.sh` runs `go generate` (cilium/ebpf `bpf2go`) then `go build`, then `sudo` to start the toy binary.
+`./run.sh` runs a release Cargo build, then uses `sudo` to start the Rust toy binary.
 
 ## Flags
 
 ```bash
 # Toy (default)
-sudo ./waf-sklookup-demo -mode toy -listen 127.0.0.1:18080 -ports 18081,18082,65500
+sudo ./rust/loader/target/release/waf-sklookup-loader -mode toy -listen 127.0.0.1:18080 -ports 18081,18082,65500
 
 # OpenResty — product-shaped (all ports → one listen; Tengine https_allow_http)
-sudo ./waf-sklookup-demo -mode openresty -target 127.0.0.1:8080 -ports 18081,18082,65500
+sudo ./rust/loader/target/release/waf-sklookup-loader -mode openresty -target 127.0.0.1:8080 -ports 18081,18082,65500
 
 # OpenResty — stock 1.19.3.2 TLS fallback (NOT the product model)
-sudo ./waf-sklookup-demo -mode openresty \
+sudo ./rust/loader/target/release/waf-sklookup-loader -mode openresty \
   -target 127.0.0.1:8080 -ports 18081,18082,65500 \
   -tls-target 127.0.0.1:8443 -tls-ports 18443
 
 # Drop / re-open a steered port (loader must still be running; maps pinned)
-sudo ./waf-sklookup-demo add 18081
-sudo ./waf-sklookup-demo remove 18081
-sudo ./waf-sklookup-demo list
+sudo ./rust/loader/target/release/waf-sklookup-loader add 18081
+sudo ./rust/loader/target/release/waf-sklookup-loader remove 18081
+sudo ./rust/loader/target/release/waf-sklookup-loader list
 # legacy: -mode close-port | open-port | dump-ports
 ```
 
@@ -170,7 +166,7 @@ sudo ./waf-sklookup-demo list
 | Symptom | Likely cause |
 |---------|----------------|
 | `load BPF` / `attach sk_lookup` fails | Not root / missing caps; kernel too old; sk_lookup disabled; restricted container |
-| `go generate` / `bpf2go` fails | Missing clang or kernel headers (`linux-libc-dev`); `asm/types.h` via `-I/usr/include/$(uname -m)-linux-gnu` |
+| Cargo/libbpf build fails | Missing clang, libbpf/libelf development files, or kernel headers (`linux-libc-dev`) |
 | Steered `curl` fails while internal port works | BPF not attached, or port not in `-ports` map |
 | Works on bare metal, fails in Docker | Many containers block BPF / netns attach — use a privileged VM or real node |
 | `$waf_external_port` empty | See error.log; do not substitute `$server_port` |
@@ -183,11 +179,9 @@ sudo ./waf-sklookup-demo list
 | Path | Role |
 |------|------|
 | `dispatch.bpf.c` | `sk_lookup` program + `open_ports` / `redir_socket` maps |
-| `loader.go` | **Reference implementation** (Go, default). Load/attach, register listener FD, toy HTTP or OpenResty sockmap. **M2 ctl** (`add`/`remove`/`list`/`bulk`) talks to pinned maps. Keep until a Rust ladder PASS. |
-| `rust/loader/` | **Experimental** Rust userspace loader (`waf-sklookup-loader`, libbpf-rs). Same C BPF object. Not the default. Not a QPS claim. |
+| `rust/loader/` | Default Rust userspace loader (`waf-sklookup-loader`, libbpf-rs). Loads the same C BPF program and provides toy, OpenResty, and M2 control-plane modes. |
 | `docs/rust-loader-plan.md` | Loader-only rewrite plan (R0) + what this crate implements |
 | `docs/acceptance-m3-rust.md` | Test recipe: M3 30K/60K via `LOADER_BIN`, isolated abs A vs B tax, Go vs Rust table |
-| `ctl.go` / `ports_bulk.go` | M2 control plane: CLI + batched map updates (30K/60K) |
 | `scripts/m3-fill-ports.sh` | M3 helper: `bulk fill` 30K or 60K into pinned `open_ports` |
 | `openresty/` | OpenResty 1.19.3.2 config + Lua for `$waf_external_port`; Tengine example listen |
 | `openresty/certs/` | `make certs` demo-only self-signed material (keys gitignored) |
@@ -204,7 +198,7 @@ sudo ./waf-sklookup-demo list
 
 ## Relation to the WAF plan
 
-- **End state:** BPF sk_lookup → OpenResty (TLS + Lua WAF), with Tengine `https_allow_http` so one listen takes HTTP and TLS. Toy mode is the kernel steering proof; M1 is HTTP wiring; P1 adds TLS + header policy; M2 is the port control plane. **P1/M2/M3 stay on this Go loader** (reference implementation / rollback). Experimental Rust userspace loader: [docs/rust-loader-plan.md](docs/rust-loader-plan.md) (first cut **loader-only**; C BPF unchanged; **not** a QPS win).
+- **End state:** BPF sk_lookup → OpenResty (TLS + Lua WAF), with Tengine `https_allow_http` so one listen takes HTTP and TLS. Toy mode is the kernel steering proof; M1 is HTTP wiring; P1 adds TLS + header policy; M2 is the Rust control plane. The C BPF hot path remains unchanged.
 - **Transition:** PROXY + thin-accept (see `docs/`). Product semantics first; switch data plane when perf gates pass.
 - Design notes live in `docs/`; the Notion summary page links this repo as the runnable demo.
 
@@ -215,7 +209,6 @@ This is a **kernel steering proof + M1/P1 wiring + M2 control plane**, not a ful
 - M3 performance matrix ([docs/acceptance-m3.md](docs/acceptance-m3.md) stub; seed the map with `./scripts/m3-fill-ports.sh`)
 - HTTP control-plane API (CLI bulk is the M3 contract)
 - Tengine runtime in the default helper (example conf + test plan only)
-- Rust loader as default (Go stays; `LOADER_BIN` selects the experimental binary — [docs/rust-loader-plan.md](docs/rust-loader-plan.md))
 - multi-worker reuseport sockmap
 
 ## License

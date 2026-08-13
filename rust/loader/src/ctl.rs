@@ -26,8 +26,7 @@ M2 control plane (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-loader bulk close -range START-END    # 30K/60K close
   sudo ./waf-sklookup-loader bulk fill -count 30000 [-start 5000]
 
-M3 Test: LOADER_BIN=./rust/loader/target/release/waf-sklookup-loader ./scripts/m3-fill-ports.sh 30000
-Go remains the default loader and rollback (./waf-sklookup-demo).
+M3 Test: M3_FULL_LADDER=1 ./scripts/m3-fill-ports.sh 30000
 ";
 
 pub fn run_ctl(args: &[String]) -> Result<()> {

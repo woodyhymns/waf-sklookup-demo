@@ -1,7 +1,5 @@
-//! Experimental Rust userspace loader. Hot path stays C BPF (`dispatch.bpf.c`).
-//!
-//! Go `./waf-sklookup-demo` remains the default and rollback. This binary is
-//! selected via `LOADER_BIN`; it is not a QPS/P99 claim versus Go.
+//! Rust userspace loader. Hot path stays C BPF (`dispatch.bpf.c`).
+//! This is the default loader and can be selected via `LOADER_BIN`.
 
 mod bulk;
 mod cli;

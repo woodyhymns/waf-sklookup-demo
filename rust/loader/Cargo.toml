@@ -3,7 +3,7 @@ name = "waf-sklookup-loader"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-2.0-or-later"
-description = "Experimental Rust userspace loader for waf-sklookup-demo (C BPF unchanged)"
+description = "Rust userspace loader for waf-sklookup-demo (C BPF unchanged)"
 publish = false
 
 [[bin]]

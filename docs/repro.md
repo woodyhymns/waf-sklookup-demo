@@ -35,7 +35,7 @@ If `bpftool` shows no `sk_lookup` / `BPF_PROG_TYPE_SK_LOOKUP`, **stop** — this
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y clang llvm libbpf-dev linux-libc-dev golang-go iproute2 curl
+sudo apt-get install -y rustc cargo clang llvm libbpf-dev libelf-dev linux-libc-dev iproute2 curl
 # Optional but useful:
 sudo apt-get install -y linux-tools-common linux-tools-$(uname -r) || true
 ```
@@ -68,16 +68,15 @@ cd /workspace/waf-sklookup-demo
 # Generates dispatch_bpfel.go / .o via bpf2go, then builds the binary
 make build
 # equivalent:
-#   go generate ./...
-#   go build -o waf-sklookup-demo .
+#   cargo build --release --manifest-path rust/loader/Cargo.toml
 ```
 
-Expect: binary `./waf-sklookup-demo` appears; no clang/bpf2go errors.
+Expect: binary `./rust/loader/target/release/waf-sklookup-loader` appears; no clang/libbpf errors.
 
 ### 2.2 Run (terminal A — keep it open)
 
 ```bash
-sudo ./waf-sklookup-demo -listen 127.0.0.1:18080 -ports 18081,18082,65500
+sudo ./rust/loader/target/release/waf-sklookup-loader -listen 127.0.0.1:18080 -ports 18081,18082,65500
 # or: ./run.sh
 # or: make run
 ```
@@ -244,10 +243,10 @@ fatal error: 'linux/bpf.h' file not found
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Attach/load fails with “not supported” / weird errno | Kernel has no `sk_lookup` (&lt; 5.9 or feature stripped) | Use a ≥5.9 kernel with sk_lookup; verify with `bpftool feature` |
-| Permission denied on load/attach | Not root / missing caps | `sudo ./waf-sklookup-demo ...` |
+| Permission denied on load/attach | Not root / missing caps | `sudo ./rust/loader/target/release/waf-sklookup-loader ...` |
 | `address already in use` on `:18080` | Another process holds the real listen port | `ss -lntp \| grep 18080`, stop the other listener or change `-listen` |
 | Steered curls fail but `:18080` works | BPF not attached, wrong netns, or ports not in `-ports` | Check startup logs for “sk_lookup attached” and “opened steered port”; same netns as the client |
-| `go generate` / bpf2go fails | No `clang`, or missing `libbpf` / kernel UAPI headers | Install `clang llvm libbpf-dev linux-libc-dev` |
+| Cargo/libbpf build fails | No `clang`, or missing `libbpf` / `libelf` / kernel UAPI headers | Install `clang llvm libbpf-dev libelf-dev linux-libc-dev` |
 | `go: ... go.mod requires go >= 1.22` | Old Go toolchain | Install Go 1.22+ |
 | Demo works on host, fails in container | Container runtime blocks BPF / netns attach | Privileged (or suitable caps) + host kernel that supports sk_lookup; attach is to *current* netns |
 | Expect `ss` to show steered ports | Misunderstanding the demo | Steered ports must **not** appear in `ss -lntp`; that is the point |
@@ -261,7 +260,7 @@ Copy this when filing or handing off:
 
 - [ ] `uname -r` ≥ 5.9 and/or `bpftool feature` shows sk_lookup  
 - [ ] `make build` succeeds  
-- [ ] `sudo ./waf-sklookup-demo ...` prints `DEMO READY`  
+- [ ] `sudo ./rust/loader/target/release/waf-sklookup-loader ...` prints `DEMO READY`
 - [ ] `curl` to `:18080`, `:18081`, `:18082`, `:65500` all return `sk_lookup demo OK`  
 - [ ] `ss -lntp` shows listener **only** on `:18080`, not on steered ports  
 - [ ] After Ctrl+C, steered `curl` fails  

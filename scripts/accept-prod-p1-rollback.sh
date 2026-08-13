@@ -120,7 +120,7 @@ T_RES0=$(date +%s%N)
   if [[ -n "${LOADER_TLS_PORTS}" ]]; then
     tls_args=(-tls-target "${TLS_TARGET:-127.0.0.1:8443}" -tls-ports "$LOADER_TLS_PORTS")
   fi
-  sudo ./waf-sklookup-demo \
+  sudo "$LOADER_BIN" \
     -mode openresty \
     -target "$TARGET" \
     -ports "$LOADER_PORTS" \
@@ -186,7 +186,7 @@ echo "|------|-----------|--------------|"
 echo "| unload loader+unpin | $UNLOAD_S | kill loader.pid; rm pin; bpftool |"
 echo "| steered fail check | — | curl http://${HOST}:${PORT}/ → fail (rc=$STEER_RC code=$STEER_CODE) |"
 echo "| direct internal OK | — | curl http://127.0.0.1:8080/ → 200 |"
-echo "| restore loader | $RESTORE_S | waf-sklookup-demo -mode openresty; wait READY |"
+echo "| restore loader | $RESTORE_S | waf-sklookup-loader -mode openresty; wait READY |"
 echo "| steered recover | — | curl http+https://${HOST}:${PORT}/ → 200 |"
 echo
 echo "| 项 | 测了什么 | 结果 |"

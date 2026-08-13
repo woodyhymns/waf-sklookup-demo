@@ -2,7 +2,7 @@
 
 - **分支**: `test/prod-gng-acceptance`（基于 `main@09d138b`）
 - **Tip SHA**: `a9a4009` (G2/G6 calibrated retest; **Hold merge**)
-- **Scope**: HAH OpenResty `/usr/local/openresty-hah`（1.19.3.2 + `https_allow_http`）+ **Go loader**；Rust **DEFER**
+- **Scope**: HAH OpenResty `/usr/local/openresty-hah`（1.19.3.2 + `https_allow_http`）+ **Rust loader**
 - **产品路径**: 同口 HTTP+HTTPS；`LOADER_TLS_PORTS=""`；conf `openresty/nginx.tengine-https-allow-http.conf.example`
 - **前置**: M3 30K/60K 内存阶梯已 PASS（见 [acceptance-m3-full-run.md](acceptance-m3-full-run.md)）
 - **执行人**: Test QA · 勿 merge · 勿 push（Repo 稍后推）
@@ -99,7 +99,7 @@ Makefile: `accept-prod-p0` / `accept-prod-p0-cps-tls` / `accept-prod-p0-long-p99
 
 - **脚本**: `scripts/accept-prod-p0-hot-ports.sh`
 - **步骤**: 背景轻流量 → `bulk open -range` ~10000 → 采样 → `bulk close` 一半 → 再采样
-- **CLI**: `sudo ./waf-sklookup-demo bulk open/close -range START-END`
+- **CLI**: `sudo ./rust/loader/target/release/waf-sklookup-loader bulk open/close -range START-END`
 
 | phase | rps | p99_us | ok | 结果 |
 |-------|-----|--------|----|------|
@@ -271,4 +271,3 @@ make accept-prod-p1
 - P1-b → G8  
 - P1-c → G9  
 - P1-d → G7/G10  
-

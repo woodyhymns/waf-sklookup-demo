@@ -44,7 +44,7 @@ The toy Go demo already showed `http_local_addr=127.0.0.1:18081` on steered conn
 | Linux ≥ 5.9 with `sk_lookup` | `sudo bpftool feature \| rg sk_lookup` |
 | root / CAP_BPF | Loader attaches BPF and updates maps |
 | Go 1.22+ | `CGO_ENABLED=0` |
-| clang | BPF object generation via `go generate` |
+| clang | BPF object generation via `libbpf-cargo` |
 | OpenResty **1.19.3.2** | Docker image `openresty/openresty:1.19.3.2-bionic` or local install |
 | curl | Verification |
 
@@ -72,7 +72,7 @@ Manual equivalent:
 openresty -p ... -c openresty/nginx.conf   # see docker-compose / helper
 
 # Terminal B — loader
-sudo ./waf-sklookup-demo -mode openresty \
+sudo ./rust/loader/target/release/waf-sklookup-loader -mode openresty \
   -target 127.0.0.1:8080 \
   -ports 18081,18082,65500
 ```
@@ -119,8 +119,8 @@ Access log (`/tmp/waf-sklookup-m1/logs/access.log` when using the helper):
 Maps are pinned at `/sys/fs/bpf/waf-sklookup/open_ports` while the loader runs.
 
 ```bash
-sudo ./waf-sklookup-demo -mode dump-ports
-sudo ./waf-sklookup-demo -mode close-port -ports 18081
+sudo ./rust/loader/target/release/waf-sklookup-loader -mode dump-ports
+sudo ./rust/loader/target/release/waf-sklookup-loader -mode close-port -ports 18081
 # or: ./run-openresty-demo.sh close-port 18081
 # or bpftool (matches docs/acceptance-m1.md; u16 LE key; 18081 = 0x46A9 → a9 46):
 #   sudo bpftool map dump name open_ports
@@ -147,7 +147,7 @@ Config uses stock nginx variables + standard OpenResty Lua (`set`, `access_by_lu
 
 ```bash
 make run-toy
-# or: sudo ./waf-sklookup-demo -mode toy -listen 127.0.0.1:18080
+# or: sudo ./rust/loader/target/release/waf-sklookup-loader -mode toy -listen 127.0.0.1:18080
 ```
 
 See [docs/repro.md](repro.md) for the original kernel-steering pack.
