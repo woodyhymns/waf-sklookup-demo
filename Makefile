@@ -1,4 +1,6 @@
-.PHONY: generate build run run-toy run-openresty verify-openresty stop-openresty test clean certs
+.PHONY: generate build run run-toy run-openresty verify-openresty stop-openresty test clean certs \
+	httpbench accept-prod-p0 accept-prod-p0-cps-tls accept-prod-p0-long-p99 \
+	accept-prod-p0-loader-lifecycle accept-prod-p0-hot-ports
 
 export CGO_ENABLED=0
 
@@ -7,6 +9,10 @@ generate:
 
 build: generate
 	go build -o waf-sklookup-demo .
+
+httpbench:
+	mkdir -p bin
+	go build -o bin/httpbench ./tools/httpbench
 
 test: generate
 	go test ./...
@@ -30,5 +36,42 @@ verify-openresty:
 stop-openresty:
 	./run-openresty-demo.sh stop
 
+# Production Go/No-Go P0 (HAH). Defaults: OPENRESTY_PREFIX=/usr/local/openresty-hah
+accept-prod-p0: httpbench build
+	chmod +x scripts/accept-prod-p0.sh scripts/accept-prod-p0-*.sh scripts/lib-prod-gng.sh
+	OPENRESTY_PREFIX="$(or $(OPENRESTY_PREFIX),/usr/local/openresty-hah)" \
+	OPENRESTY_NGINX_CONF="$(or $(OPENRESTY_NGINX_CONF),openresty/nginx.tengine-https-allow-http.conf.example)" \
+	LOADER_TLS_PORTS="" \
+	./scripts/accept-prod-p0.sh
+
+accept-prod-p0-cps-tls: httpbench build
+	chmod +x scripts/accept-prod-p0-cps-tls.sh scripts/lib-prod-gng.sh
+	OPENRESTY_PREFIX="$(or $(OPENRESTY_PREFIX),/usr/local/openresty-hah)" \
+	OPENRESTY_NGINX_CONF="$(or $(OPENRESTY_NGINX_CONF),openresty/nginx.tengine-https-allow-http.conf.example)" \
+	LOADER_TLS_PORTS="" \
+	./scripts/accept-prod-p0-cps-tls.sh
+
+accept-prod-p0-long-p99: httpbench build
+	chmod +x scripts/accept-prod-p0-long-p99.sh scripts/lib-prod-gng.sh
+	OPENRESTY_PREFIX="$(or $(OPENRESTY_PREFIX),/usr/local/openresty-hah)" \
+	OPENRESTY_NGINX_CONF="$(or $(OPENRESTY_NGINX_CONF),openresty/nginx.tengine-https-allow-http.conf.example)" \
+	LOADER_TLS_PORTS="" \
+	./scripts/accept-prod-p0-long-p99.sh
+
+accept-prod-p0-loader-lifecycle: build
+	chmod +x scripts/accept-prod-p0-loader-lifecycle.sh scripts/lib-prod-gng.sh
+	OPENRESTY_PREFIX="$(or $(OPENRESTY_PREFIX),/usr/local/openresty-hah)" \
+	OPENRESTY_NGINX_CONF="$(or $(OPENRESTY_NGINX_CONF),openresty/nginx.tengine-https-allow-http.conf.example)" \
+	LOADER_TLS_PORTS="" \
+	./scripts/accept-prod-p0-loader-lifecycle.sh
+
+accept-prod-p0-hot-ports: httpbench build
+	chmod +x scripts/accept-prod-p0-hot-ports.sh scripts/lib-prod-gng.sh
+	OPENRESTY_PREFIX="$(or $(OPENRESTY_PREFIX),/usr/local/openresty-hah)" \
+	OPENRESTY_NGINX_CONF="$(or $(OPENRESTY_NGINX_CONF),openresty/nginx.tengine-https-allow-http.conf.example)" \
+	LOADER_TLS_PORTS="" \
+	./scripts/accept-prod-p0-hot-ports.sh
+
 clean:
 	rm -f waf-sklookup-demo dispatch_bpfel.go dispatch_bpfel.o dispatch_bpfeb.go dispatch_bpfeb.o
+	rm -f bin/httpbench
