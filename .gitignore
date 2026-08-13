@@ -7,6 +7,7 @@
 *.o
 /bin/
 *.deb
+/rust/loader/target/
 openresty/certs/*.key
 openresty/certs/*.crt
 openresty/certs/*.pem
