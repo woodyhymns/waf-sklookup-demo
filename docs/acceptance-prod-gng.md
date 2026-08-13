@@ -1,7 +1,7 @@
 # Production Go/No-Go 验收包（Acceptance）
 
 - **分支**: `test/prod-gng-acceptance`（基于 `main@09d138b`）
-- **Tip SHA**: `6e01c65`
+- **Tip SHA**: `bf4c86b`
 - **Scope**: HAH OpenResty `/usr/local/openresty-hah`（1.19.3.2 + `https_allow_http`）+ **Go loader**；Rust **DEFER**
 - **产品路径**: 同口 HTTP+HTTPS；`LOADER_TLS_PORTS=""`；conf `openresty/nginx.tengine-https-allow-http.conf.example`
 - **前置**: M3 30K/60K 内存阶梯已 PASS（见 [acceptance-m3-full-run.md](acceptance-m3-full-run.md)）
@@ -111,23 +111,85 @@ Makefile: `accept-prod-p0` / `accept-prod-p0-cps-tls` / `accept-prod-p0-long-p99
 
 ---
 
-## P1（文档项；脚本可选 stub）
-
-| # | 项 | 说明 | 结果 |
-|---|----|------|------|
-| P1-a | BPF map bytes curve | 随端口规模的 map/memlock 曲线（可复用 M3 ladder + `bpftool map show`） | 文档 / M3 已有 30K/60K 点 |
-| P1-b | reuseport skew | 多 worker / reuseport 倾斜观察（本 demo `worker_processes 1`，记 N/A 或后续） | ☐ stub |
-| P1-c | `$waf_external_port` true path | 导向口 body/access_log 真值（P1/M1 已验；生产抽检） | 参见 acceptance-p1 |
-| P1-d | rollback drill | 卸 sk_lookup / 停 loader → 业务回退路径演练记录 | ☐ stub |
-
-可选 stub（不作为 P0 门禁）:
+## 一键跑 P1
 
 ```bash
-# P1-a quick map bytes
-sudo bpftool map show name open_ports
-# P1-d rollback sketch
-./run-openresty-demo.sh stop   # detach loader; document client impact + recovery
+export OPENRESTY_PREFIX=/usr/local/openresty-hah
+export OPENRESTY_NGINX_CONF=openresty/nginx.tengine-https-allow-http.conf.example
+export LOADER_TLS_PORTS=""
+make accept-prod-p1
+# 或: ./scripts/accept-prod-p1.sh
 ```
+
+产出：
+
+- [acceptance-prod-gng-p1-last.md](acceptance-prod-gng-p1-last.md) — 短表
+- [acceptance-prod-gng-p1-last.log](acceptance-prod-gng-p1-last.log) — 全文 log
+
+个别脚本 / Makefile: `accept-prod-p1-map-bytes` / `accept-prod-p1-reuseport` / `accept-prod-p1-waf-port-path` / `accept-prod-p1-rollback`
+
+---
+
+## P1（应跑项）
+
+### P1-a BPF map bytes curve
+
+- **脚本**: `scripts/accept-prod-p1-map-bytes.sh`
+- **测什么**: baseline → bulk fill 30K → 60K（可选 near-full ≤u16；100K unique N/A）采样 `bpftool map show name open_ports` memlock/max_entries + loader RSS + OR RSS
+- **强调**: **map memlock ≠ process RSS**（内核记账）
+
+| ports | map memlock B | max_entries | loader RSS | OR RSS | note |
+|-------|---------------|-------------|------------|--------|------|
+| baseline (have=3) | 10487488 | 131072 | ~7 MB | ~8.3 MB | few ports |
+| 30K (have=30001) | 10487488 | 131072 | ~7 MB | ~8.3 MB | fill ~20ms |
+| 60K (have=60001) | 10487488 | 131072 | ~7 MB | ~8.3 MB | fill ~27ms |
+| near-full(~60500) | 10487488 | 131072 | ~7 MB | ~8.3 MB | 100K unique N/A (u16) |
+
+**结果: 通过** — memlock 预充到 max_entries（~10.5MB）且随端口占用几乎不变；**≠ process RSS**（loader/OR 基本持平）。详见 [p1-last](acceptance-prod-gng-p1-last.md)。
+
+### P1-b multi-worker / SO_REUSEPORT skew
+
+- **脚本**: `scripts/accept-prod-p1-reuseport.sh`
+- **测什么**: 生成临时 conf：`worker_processes 4` + `listen ... https_allow_http reuseport`；lua shared dict 按 `ngx.worker.id()` 计数；并发短连接后看分布
+- **通过**: 无单 worker ~100% 而其余 idle 的极端倾斜；若 sk_lookup+multi-worker 在本栈不可用 → **阻塞**（不假 PASS）
+- **恢复**: 跑完恢复 `worker_processes 1` 默认 conf
+
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| conf-4-reuseport | worker_processes=4 + listen reuseport | 通过 |
+| worker-dist | w0..w3 ≈ 25% each (max_pct≈25.8, idle=0) | 通过 |
+| restore-wp1 | 恢复 worker_processes=1 默认 conf | 通过 |
+
+**结果: 通过** — 本栈 sk_lookup→reuseport 组未出现单 worker 吃满。
+
+### P1-c `$waf_external_port` true path（ACL / log / limit）
+
+- **脚本**: `scripts/accept-prod-p1-waf-port-path.sh`
+- **测什么**: 临时 conf：access_log 保留 `waf_external_port`；`access_by_lua` 在 `resolve()` 后 ACL deny `19999`；shared dict 按 **external port** 限流
+- **证明**: 口 A→200 且 body/log=`waf_external_port=A`（非 Host）；deny 口→403；A 突发 503 时同 Host 的 B 仍 200
+
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| port-A-body/log | :18081 Host=wrong → waf_external_port=18081 | 通过 |
+| acl-deny | :19999 → 403 | 通过 |
+| limit-by-ext-port | burst A→503 ×12 同时 B→200（同 Host） | 通过 |
+
+**结果: 通过**
+
+### P1-d rollback drill
+
+- **脚本**: `scripts/accept-prod-p1-rollback.sh`
+- **测什么**: 导向 curl 200 → 定时 unload loader/detach → 导向失败 + 直连 `:8080` 仍可用 → 定时 restore loader → 导向恢复
+- **PROXY**: 若仓库无 PROXY 实现 → **N/A/阻塞(无实现)**；观察路径 = 直连内听
+
+| 项 | 测了什么 | 结果 |
+|----|----------|------|
+| unload | kill loader + unpin ~0.11s；导向 rc=7 | 通过 |
+| direct-8080 | 直连内听仍 200（回退观察路径） | 通过 |
+| restore | loader READY ~0.26s；HTTP+HTTPS 恢复 | 通过 |
+| PROXY-fallback | 仓库无 PROXY 回退实现 | **N/A/阻塞(无实现)** |
+
+**结果: 通过**（直连内听路径）；PROXY 子路径阻塞/无实现。
 
 ---
 
@@ -138,6 +200,8 @@ sudo bpftool map show name open_ports
 > 规则：P0 全 **通过** → 推荐 **Go**（仍待书面门槛确认）；任一 **失败** → **No-Go**；缺工具/环境不明 → **阻塞**。
 
 最近一次自动跑：见 [acceptance-prod-gng-p0-last.md](acceptance-prod-gng-p0-last.md)。
+
+最近一次 P1：见 [acceptance-prod-gng-p1-last.md](acceptance-prod-gng-p1-last.md)。
 
 ---
 
@@ -151,7 +215,10 @@ sudo bpftool map show name open_ports
 | `tools/httpbench/` | Go CPS/P99 bench（替代 wrk/ab） |
 | `scripts/lib-prod-gng.sh` | 共享 env/helpers |
 | `scripts/accept-prod-p0*.sh` | P0 脚本 + umbrella |
-| `Makefile` targets `accept-prod-p0*` | make 入口 |
+| `scripts/accept-prod-p1*.sh` | P1 脚本 + umbrella |
+| `docs/acceptance-prod-gng-p1-last.md` | 最近 P1 短表 |
+| `docs/acceptance-prod-gng-p1-last.log` | 最近 P1 全文 |
+| `Makefile` targets `accept-prod-p0*` / `accept-prod-p1*` | make 入口 |
 
 ---
 *Test QA · branch test/prod-gng-acceptance · do not merge · do not push*
