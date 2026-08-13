@@ -7,13 +7,7 @@ set -euo pipefail
 source "$(dirname "$0")/lib-prod-gng.sh"
 
 STARTED_HERE=0
-cleanup() {
-  # Always try to leave a stopped or healthy state; prefer stop if we started.
-  if [[ "$STARTED_HERE" -eq 1 ]]; then
-    demo_stop
-  fi
-}
-trap cleanup EXIT
+install_hygiene_traps
 
 echo "=== P0-3 loader lifecycle (kill → fail → restart → recover) ==="
 require_hah

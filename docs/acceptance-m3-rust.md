@@ -1,4 +1,4 @@
-# Rust loader — M3 30K/60K recipe + Go vs Rust table (R1–R3)
+# Rust loader — M3 shared-machine ladder + Go vs Rust table (R1–R3)
 
 **Status:** first-cut Rust **userspace** loader. Hot path is unchanged C BPF (`dispatch.bpf.c` / `sk_lookup`). Go `./waf-sklookup-demo` stays the default and rollback. **Do not** treat this rewrite as a QPS miracle or a G2-rel fix.
 
@@ -8,7 +8,7 @@ Kernel `sk_lookup` is the same object both loaders attach. Userspace choice cann
 
 ## 0. What Test re-runs (copy-paste)
 
-Same ladder as [acceptance-m3.md](acceptance-m3.md) / [acceptance-m3-full-run.md](acceptance-m3-full-run.md). Only `LOADER_BIN` changes.
+The shared-machine default is 100 → 1K → 10K, with each tier closed before the next. Only `LOADER_BIN` changes. The historical 30K/60K ladder requires explicit `M3_FULL_LADDER=1` and a dedicated host.
 
 **Go (rollback, still the default):**
 
@@ -17,11 +17,10 @@ export CGO_ENABLED=0
 # stock: OPENRESTY_PREFIX=/usr/local/openresty
 # HAH:   OPENRESTY_PREFIX=/usr/local/openresty-hah
 unset LOADER_BIN    # or: export LOADER_BIN=./waf-sklookup-demo
-./run-openresty-demo.sh start
-./scripts/m3-fill-ports.sh 30000
-./scripts/m3-fill-ports.sh 60000
-sudo bpftool map show name open_ports   # max_entries 131072, memlock ~8–16 MB
-curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:34999/   # expect 200
+./scripts/accept-prod-p1-map-bytes.sh
+# Dedicated host only:
+M3_FULL_LADDER=1 ./scripts/accept-prod-p1-map-bytes.sh
+# The script prints bpftool/RSS samples during each tier, then fully cleans up.
 ```
 
 **Rust (experimental dual-binary):**
@@ -33,12 +32,10 @@ make rust-loader
 export LOADER_BIN=./rust/loader/target/release/waf-sklookup-loader
 # stock: OPENRESTY_PREFIX=/usr/local/openresty
 # HAH:   OPENRESTY_PREFIX=/usr/local/openresty-hah
-./run-openresty-demo.sh start          # greps OPENRESTY P1 READY (same marker as Go)
-./scripts/m3-fill-ports.sh 30000
-./scripts/m3-fill-ports.sh 60000
-sudo bpftool map show name open_ports   # max_entries 131072, memlock ~8–16 MB
-curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:34999/   # expect 200
-"$LOADER_BIN" list -count               # count=60000 (plus any demo ports still present)
+./scripts/accept-prod-p1-map-bytes.sh
+# Dedicated host only:
+M3_FULL_LADDER=1 ./scripts/accept-prod-p1-map-bytes.sh
+# The script prints bpftool/RSS samples during each tier, then fully cleans up.
 ```
 
 Also keep M1/P1 `./run-openresty-demo.sh verify` and M2 `add` / `remove` / `list` with the same `LOADER_BIN`.

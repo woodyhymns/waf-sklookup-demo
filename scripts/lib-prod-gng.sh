@@ -15,6 +15,7 @@ LOADER_TLS_PORTS="${LOADER_TLS_PORTS-}"
 LOADER_PORTS="${LOADER_PORTS:-18081,18082,65500}"
 TARGET="${TARGET:-127.0.0.1:8080}"
 PIN_DIR="${PIN_DIR:-/sys/fs/bpf/waf-sklookup}"
+LOADER_BIN="${LOADER_BIN:-./waf-sklookup-demo}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-18081}"
 DURATION="${DURATION:-8s}"
@@ -22,7 +23,7 @@ CONCURRENCY="${CONCURRENCY:-50}"
 HOT_COUNT="${HOT_COUNT:-10000}"
 HOT_START="${HOT_START:-20000}"
 
-export OPENRESTY_PREFIX OPENRESTY_NGINX_CONF LOADER_TLS_PORTS LOADER_PORTS TARGET PIN_DIR
+export OPENRESTY_PREFIX OPENRESTY_NGINX_CONF LOADER_TLS_PORTS LOADER_PORTS TARGET PIN_DIR LOADER_BIN
 
 STATE_DIR="${TMPDIR:-/tmp}/waf-sklookup-m1"
 HTTPBENCH_BIN="${HTTPBENCH_BIN:-$REPO_ROOT/bin/httpbench}"
@@ -36,9 +37,17 @@ ensure_httpbench() {
 }
 
 ensure_loader_bin() {
-  if [[ ! -x ./waf-sklookup-demo ]]; then
-    go generate ./...
-    go build -o waf-sklookup-demo .
+  if [[ ! -x "$LOADER_BIN" ]]; then
+    if [[ "$(basename "$LOADER_BIN")" == "waf-sklookup-demo" ]]; then
+      go generate ./...
+      go build -o waf-sklookup-demo .
+    else
+      cargo build --release --manifest-path rust/loader/Cargo.toml
+    fi
+  fi
+  if [[ ! -x "$LOADER_BIN" ]]; then
+    echo "LOADER_BIN not executable: $LOADER_BIN" >&2
+    return 1
   fi
 }
 
@@ -50,6 +59,46 @@ demo_start() {
 
 demo_stop() {
   ./run-openresty-demo.sh stop >/dev/null 2>&1 || true
+}
+
+# Idempotent, unconditional test cleanup.  Do not key this on STARTED_HERE: a
+# previous/parallel failed test may own the surviving processes or map entries.
+HYGIENE_CLEANING=0
+hygiene_cleanup() {
+  local rc=$?
+  [[ "$HYGIENE_CLEANING" -eq 1 ]] && return "$rc"
+  HYGIENE_CLEANING=1
+  if [[ "${HYGIENE_DRY_RUN:-0}" == "1" ]]; then
+    echo "HYGIENE_DRY_RUN: would close map entries, stop both loaders, detach/unpin BPF, stop OpenResty, and docker compose down"
+    return "$rc"
+  fi
+  set +e
+
+  # Close every possible test/fill range while the pinned map is still usable.
+  # The demo's default ports are included intentionally: final cleanup is a
+  # machine-hygiene boundary, not a request to preserve a running demo.
+  if [[ -x "${LOADER_BIN:-./waf-sklookup-demo}" ]]; then
+    sudo "${LOADER_BIN:-./waf-sklookup-demo}" bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
+  fi
+  if [[ -x ./waf-sklookup-demo && "${LOADER_BIN:-./waf-sklookup-demo}" != "./waf-sklookup-demo" ]]; then
+    sudo ./waf-sklookup-demo bulk close -range 1-65535 -pin-dir "$PIN_DIR" >/dev/null 2>&1 || true
+  fi
+
+  demo_stop || true
+  # Best-effort fallback for stale pins/links left by a crashed loader.
+  if [[ -d "$PIN_DIR" ]]; then
+    sudo find "$PIN_DIR" -mindepth 1 -maxdepth 1 -delete >/dev/null 2>&1 || true
+    sudo rmdir "$PIN_DIR" >/dev/null 2>&1 || true
+  fi
+  set -e
+  return "$rc"
+}
+
+install_hygiene_traps() {
+  trap 'hygiene_cleanup' EXIT ERR
+  trap 'hygiene_cleanup; exit 130' INT
+  trap 'hygiene_cleanup; exit 131' QUIT
+  trap 'hygiene_cleanup; exit 143' TERM
 }
 
 mark_row() {

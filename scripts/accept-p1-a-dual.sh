@@ -10,7 +10,8 @@
 #
 # Optional: PORT=18081 HOST=127.0.0.1
 set -euo pipefail
-cd "$(dirname "$0")/.."
+source "$(dirname "$0")/lib-prod-gng.sh"
+install_hygiene_traps
 export CGO_ENABLED=0
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-18081}"
@@ -82,8 +83,6 @@ if ! ./run-openresty-demo.sh start; then
   echo "FAIL: start failed — ensure helper uses listen ... ssl https_allow_http (see openresty/nginx.tengine-https-allow-http.conf.example)" >&2
   exit 1
 fi
-cleanup() { ./run-openresty-demo.sh stop >/dev/null 2>&1 || true; }
-trap cleanup EXIT
 
 echo "=== P1-A same port HTTP ==="
 curl -sS --max-time 5 "http://${HOST}:${PORT}/" | tee /tmp/p1a-http.body

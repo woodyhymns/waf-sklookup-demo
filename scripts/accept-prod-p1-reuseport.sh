@@ -12,14 +12,13 @@ GEN_CONF=""
 ORIG_CONF="${OPENRESTY_NGINX_CONF}"
 cleanup() {
   export OPENRESTY_NGINX_CONF="$ORIG_CONF"
-  if [[ "$STARTED_HERE" -eq 1 ]]; then
-    demo_stop || true
-  fi
-  # Restore default single-worker by restarting with original conf if still up
-  # (umbrella will restart next suite member as needed)
   rm -f "$GEN_CONF" 2>/dev/null || true
+  hygiene_cleanup
 }
-trap cleanup EXIT
+trap 'cleanup' EXIT ERR
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 131' QUIT
+trap 'cleanup; exit 143' TERM
 
 echo "=== P1-b multi-worker / SO_REUSEPORT skew ==="
 require_hah
