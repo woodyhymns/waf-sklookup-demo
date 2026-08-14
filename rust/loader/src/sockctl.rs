@@ -73,18 +73,21 @@ pub fn start(path: PathBuf, group: Option<u32>, pin_dir: PathBuf, ports_file: Pa
     if !parent_existed {
         fs::set_permissions(parent, fs::Permissions::from_mode(0o750))?;
     }
-    if path.exists() { fs::remove_file(&path).with_context(|| format!("unlink stale socket {}", path.display()))?; }
-    let listener = UnixListener::bind(&path).with_context(|| format!("bind control socket {}", path.display()))?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o660))?;
-    if let Some(gid) = group {
-        let rc = unsafe { libc::chown(std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?.as_ptr(), u32::MAX, gid) };
-        if rc != 0 { return Err(std::io::Error::last_os_error()).context("chown control socket"); }
-    }
-    listener.set_nonblocking(true)?;
+    let listener = bind_listener(&path, group, true)?;
     let thread_path = path.clone();
     let join = thread::spawn(move || {
+        let mut listener = listener;
         crate::log_msg(format_args!("control socket listening path={} mode=0660", thread_path.display()));
         while !shutdown.load(Ordering::SeqCst) {
+            if !thread_path.exists() {
+                match bind_listener(&thread_path, group, false) {
+                    Ok(new_listener) => {
+                        listener = new_listener;
+                        crate::log_msg(format_args!("control socket path recreated: {}", thread_path.display()));
+                    }
+                    Err(err) => crate::log_msg(format_args!("control socket recreate failed (will retry): {err:#}")),
+                }
+            }
             match listener.accept() {
                 Ok((stream, _)) => handle(stream, &thread_path, &pin_dir, &ports_file, &mutations),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(50)),
@@ -93,6 +96,21 @@ pub fn start(path: PathBuf, group: Option<u32>, pin_dir: PathBuf, ports_file: Pa
         }
     });
     Ok(Server { path, join: Some(join) })
+}
+
+fn bind_listener(path: &Path, group: Option<u32>, unlink_stale: bool) -> Result<UnixListener> {
+    if unlink_stale && path.exists() {
+        fs::remove_file(path).with_context(|| format!("unlink stale socket {}", path.display()))?;
+    }
+    let listener = UnixListener::bind(path)
+        .with_context(|| format!("bind control socket {}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o660))?;
+    if let Some(gid) = group {
+        let rc = unsafe { libc::chown(std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?.as_ptr(), u32::MAX, gid) };
+        if rc != 0 { return Err(std::io::Error::last_os_error()).context("chown control socket"); }
+    }
+    listener.set_nonblocking(true)?;
+    Ok(listener)
 }
 
 fn peer_cred(stream: &UnixStream) -> Result<PeerCred> {

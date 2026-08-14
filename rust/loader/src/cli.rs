@@ -78,6 +78,7 @@ pub fn is_ctl_command(s: &str) -> bool {
             | "close-ports"
             | "reconcile"
             | "apply"
+            | "rescan-listen"
             | "help"
     )
 }
@@ -337,12 +338,19 @@ mod tests {
             "help",
             "reconcile",
             "apply",
+            "rescan-listen",
         ] {
             assert!(is_ctl_command(c), "{c} should be a ctl command");
         }
         assert!(!is_ctl_command("-mode"));
         assert!(!is_ctl_command("toy"));
         assert!(!is_ctl_command("openresty"));
+    }
+
+    #[test]
+    fn rescan_is_ops_command_not_attach_mode() {
+        assert!(is_ctl_command("rescan-listen"));
+        assert!(RunMode::parse("rescan-listen").is_err());
     }
 
     #[test]

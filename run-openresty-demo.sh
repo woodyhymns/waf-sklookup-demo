@@ -25,6 +25,7 @@ usage() {
 Usage: $0 [start|stop|verify|add PORT|remove PORT|list|reconcile|load-ports ...|bulk ...|fill COUNT|close-port PORT|open-port PORT|dump-ports|certs]
 
   start              Build loader, start OpenResty, attach sk_lookup
+  start-openresty-only Internal recovery hook: start OpenResty without touching loader/maps
   stop               Stop loader + OpenResty started by this script
   verify             Bind check + HTTP; dual-protocol SAME-port case; stock TLS fallback
   add PORT [...]     M2: insert port(s) or START-END into pinned open_ports (no reload)
@@ -555,6 +556,8 @@ fi
 
 case "$1" in
   start) cmd_start ;;
+  # Internal recovery hook: reuse frontend selection without touching loader/maps.
+  start-openresty-only) start_openresty ;;
   stop) cmd_stop ;;
   verify) cmd_verify ;;
   add) shift; cmd_add "$@" ;;
