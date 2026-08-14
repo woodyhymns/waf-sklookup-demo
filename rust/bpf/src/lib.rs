@@ -13,7 +13,8 @@ const SK_PASS: u32 = 1;
 // all values in the ELF .maps section remain zero-initialized.
 #[repr(C)]
 struct OpenPortsDef {
-    type_: *mut [u32; 1], // BPF_MAP_TYPE_HASH
+    // rustc still emits this raw identifier as `type_` in BTF; the build fixes it.
+    r#type: *mut [u32; 1], // BPF_MAP_TYPE_HASH
     max_entries: *mut [u32; 131072],
     key: *mut u16,
     value: *mut u8,
@@ -21,7 +22,8 @@ struct OpenPortsDef {
 
 #[repr(C)]
 struct RedirSocketDef {
-    type_: *mut [u32; 15], // BPF_MAP_TYPE_SOCKMAP
+    // rustc still emits this raw identifier as `type_` in BTF; the build fixes it.
+    r#type: *mut [u32; 15], // BPF_MAP_TYPE_SOCKMAP
     max_entries: *mut [u32; 2],
     key: *mut u32,
     value: *mut u64,
@@ -31,7 +33,7 @@ struct RedirSocketDef {
 #[no_mangle]
 #[link_section = ".maps"]
 static mut open_ports: OpenPortsDef = OpenPortsDef {
-    type_: core::ptr::null_mut(),
+    r#type: core::ptr::null_mut(),
     max_entries: core::ptr::null_mut(),
     key: core::ptr::null_mut(),
     value: core::ptr::null_mut(),
@@ -41,7 +43,7 @@ static mut open_ports: OpenPortsDef = OpenPortsDef {
 #[no_mangle]
 #[link_section = ".maps"]
 static mut redir_socket: RedirSocketDef = RedirSocketDef {
-    type_: core::ptr::null_mut(),
+    r#type: core::ptr::null_mut(),
     max_entries: core::ptr::null_mut(),
     key: core::ptr::null_mut(),
     value: core::ptr::null_mut(),

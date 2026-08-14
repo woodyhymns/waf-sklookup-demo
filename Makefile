@@ -28,8 +28,9 @@ rust-loader-test:
 
 # Rust source twin of dispatch.bpf.c. Requires nightly + rust-src; C stays default.
 rust-bpf:
-	cargo +nightly build --release -Z build-std=core --target bpfel-unknown-none --manifest-path rust/bpf/Cargo.toml
+	cd rust/bpf && PATH="$(HOME)/.cargo/bin:$(PATH)" cargo +nightly build --release -Z build-std=core --target bpfel-unknown-none
 	cp rust/bpf/target/bpfel-unknown-none/release/dispatch-rust rust/bpf/target/bpfel-unknown-none/release/dispatch-rust.o
+	python3 scripts/patch-rust-btf-map-type.py rust/bpf/target/bpfel-unknown-none/release/dispatch-rust.o
 
 certs:
 	chmod +x openresty/certs/gen-demo-certs.sh
