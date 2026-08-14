@@ -14,6 +14,52 @@ use crate::listen_fd;
 use crate::load::{open_steered_ports, register_listen_fd};
 use crate::pin::{REDIR_PRIMARY, REDIR_TLS};
 
+fn socket_inode(fd: &OwnedFd) -> Result<u64> {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe { libc::fstat(fd.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("fstat listen fd");
+    }
+    Ok(unsafe { stat.assume_init() }.st_ino)
+}
+
+pub fn rescan_slot(
+    redir: &dyn MapCore,
+    target: &str,
+    slot: u32,
+    held: Option<&OwnedFd>,
+) -> Result<Option<OwnedFd>> {
+    let (mut host, port_raw) = split_host_port(target);
+    if host.is_empty() { host = "0.0.0.0".into(); }
+    let port: u16 = port_raw.parse().with_context(|| format!("bad listen port {port_raw:?}"))?;
+    let fresh = listen_fd::find_listen_socket_file(&host, port)?;
+    if let Some(old) = held {
+        if socket_inode(old)? == socket_inode(&fresh)? { return Ok(None); }
+    }
+    register_listen_fd(redir, fresh.as_raw_fd(), slot)?;
+    crate::log_msg(format_args!("rescan-listen swapped redir_socket[{slot}] to live {target}"));
+    Ok(Some(fresh))
+}
+
+pub fn rescan_held(
+    redir: &dyn MapCore,
+    target: &str,
+    tls_target: Option<&str>,
+    held: &mut Vec<OwnedFd>,
+) -> Result<usize> {
+    let mut changed = 0;
+    if let Some(fd) = rescan_slot(redir, target, REDIR_PRIMARY, held.first())? {
+        if held.is_empty() { held.push(fd) } else { held[0] = fd };
+        changed += 1;
+    }
+    if let Some(target) = tls_target {
+        if let Some(fd) = rescan_slot(redir, target, REDIR_TLS, held.get(1))? {
+            if held.len() < 2 { held.push(fd) } else { held[1] = fd };
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
 pub fn run_openresty_mode(
     open_ports: &dyn MapCore,
     redir_socket: &dyn MapCore,

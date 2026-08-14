@@ -163,6 +163,8 @@ sudo apt-get install -y rustc cargo clang llvm libbpf-dev libelf-dev linux-libc-
 
 ## systemd deployment
 
+Exception recovery (loader/OpenResty/worker-respawn, wiped pins, missing ctl.sock, map≠file, boot order, StartLimit): [docs/recovery.md](docs/recovery.md) / `./scripts/recover.sh`.
+
 Example foreground OpenResty and loader units, their fail-closed restart policy, environment overrides, and operator-only installation steps are documented in [docs/systemd.md](docs/systemd.md). Run `scripts/check-install.sh` before starting them. Do not enable these services on shared demo VMs.
 
 ## Flags

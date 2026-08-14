@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use libbpf_rs::{MapCore, MapFlags};
+use libbpf_rs::{MapCore, MapFlags, MapHandle};
 
 use crate::bulk::{
     bulk_delete_ports, bulk_put_ports, format_bulk_summary, format_remove_summary,
@@ -28,6 +28,7 @@ Root CLI escape hatch (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-loader bulk close -range START-END    # 30K/60K close
   sudo ./waf-sklookup-loader bulk fill -count 30000 [-start 5000]
   sudo ./waf-sklookup-loader reconcile|apply [-ports-file ports.conf]
+  sudo ./waf-sklookup-loader rescan-listen [-target 127.0.0.1:8080] [-tls-target ADDR]
 
 Mutating commands update the desired file (default ports.conf) and the pinned map.
   Pass -no-file to edit the live map only (test/hygiene overlay; next reconcile restores the file).
@@ -48,6 +49,7 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
         "close-ports" => ctl_bulk_remove(&args[1..]),
         "bulk" => ctl_bulk(&args[1..]),
         "reconcile" | "apply" => ctl_reconcile(&args[1..]),
+        "rescan-listen" => ctl_rescan_listen(&args[1..]),
         "help" => {
             eprint!("{CTL_USAGE}");
             Ok(())
@@ -61,6 +63,26 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
             cred.uid, cred.gid, cred.pid, args[0], detail, result.is_ok());
     }
     result
+}
+
+fn ctl_rescan_listen(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["help"], &["pin-dir", "target", "tls-target"])?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
+    let path = pin::redir_socket_path(pin_dir_of(&flags));
+    let map = MapHandle::from_pinned_path(&path)
+        .with_context(|| format!("open pinned redir_socket {}", path.display()))?;
+    let mut held = Vec::new();
+    crate::openresty::rescan_held(
+        &map,
+        flags.get("target").unwrap_or("127.0.0.1:8080"),
+        flags.get("tls-target").filter(|v| !v.is_empty()),
+        &mut held,
+    )?;
+    println!("rescan-listen: refreshed live listen fd(s); open_ports unchanged");
+    Ok(())
 }
 
 pub fn enforce_ladder(ports: &[u16], explicit: bool) -> Result<()> {

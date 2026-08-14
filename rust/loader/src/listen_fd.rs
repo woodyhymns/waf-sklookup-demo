@@ -13,12 +13,12 @@ pub fn find_listen_socket_file(host: &str, port: u16) -> Result<OwnedFd> {
         .parse()
         .with_context(|| format!("invalid host {host:?}"))?;
     let data = fs::read_to_string("/proc/net/tcp").context("read /proc/net/tcp")?;
-    let inode = match parse_listen_inode(&data, ip, port) {
-        Ok(ino) => ino,
-        Err(_) => parse_listen_inode(&data, Ipv4Addr::UNSPECIFIED, port)
-            .with_context(|| format!("no LISTEN socket for {ip}:{port}"))?,
-    };
-    let f = open_socket_by_inode(inode)?;
+    let mut inodes = parse_listen_inodes(&data, ip, port);
+    if inodes.is_empty() {
+        inodes = parse_listen_inodes(&data, Ipv4Addr::UNSPECIFIED, port);
+    }
+    let (inode, f) = first_openable_inode(&inodes, open_socket_by_inode)
+        .with_context(|| format!("no live LISTEN socket for {ip}:{port}"))?;
     crate::log_msg(format_args!(
         "discovered listen socket inode={inode} for {ip}:{port}"
     ));
@@ -26,11 +26,19 @@ pub fn find_listen_socket_file(host: &str, port: u16) -> Result<OwnedFd> {
 }
 
 pub fn parse_listen_inode(table: &str, ip: Ipv4Addr, port: u16) -> Result<u64> {
+    parse_listen_inodes(table, ip, port)
+        .into_iter()
+        .next()
+        .with_context(|| format!("no LISTEN socket for {ip}:{port}"))
+}
+
+pub fn parse_listen_inodes(table: &str, ip: Ipv4Addr, port: u16) -> Vec<u64> {
+    let mut out = Vec::new();
     let want_port = format!("{port:04X}");
     let want_addr = format!("{:08X}", ip_to_proc_hex(ip));
     let mut lines = table.lines();
     if lines.next().is_none() {
-        bail!("empty /proc/net/tcp");
+        return out;
     }
     for line in lines {
         let fields: Vec<&str> = line.split_whitespace().collect();
@@ -49,10 +57,27 @@ pub fn parse_listen_inode(table: &str, ip: Ipv4Addr, port: u16) -> Result<u64> {
             continue;
         }
         if let Ok(inode) = fields[9].parse::<u64>() {
-            return Ok(inode);
+            out.push(inode);
         }
     }
-    bail!("no LISTEN socket for {ip}:{port}")
+    out
+}
+
+fn first_openable_inode<T>(
+    inodes: &[u64],
+    mut open: impl FnMut(u64) -> Result<T>,
+) -> Result<(u64, T)> {
+    let mut last = None;
+    for inode in inodes {
+        match open(*inode) {
+            Ok(v) => return Ok((*inode, v)),
+            Err(e) => last = Some(e),
+        }
+    }
+    match last {
+        Some(e) => Err(e),
+        None => bail!("no matching LISTEN inode"),
+    }
 }
 
 pub fn ip_to_proc_hex(ip: Ipv4Addr) -> u32 {
@@ -156,5 +181,21 @@ mod tests {
     #[test]
     fn ip_to_proc_hex_loopback() {
         assert_eq!(ip_to_proc_hex(Ipv4Addr::new(127, 0, 0, 1)), 0x0100_007F);
+    }
+
+    #[test]
+    fn reuseport_tries_next_inode_when_first_vanished() {
+        let (inode, value) = first_openable_inode(&[1001, 1002], |inode| {
+            if inode == 1001 { bail!("vanished") } else { Ok("live") }
+        }).unwrap();
+        assert_eq!((inode, value), (1002, "live"));
+    }
+
+    #[test]
+    fn parses_all_reuseport_inodes() {
+        let table = "sl local_address rem_address st tx rx tr tm retr uid timeout inode\n\
+0: 0100007F:1F90 00000000:0000 0A 0:0 00:0 0 0 0 1001\n\
+1: 0100007F:1F90 00000000:0000 0A 0:0 00:0 0 0 0 1002\n";
+        assert_eq!(parse_listen_inodes(table, Ipv4Addr::LOCALHOST, 8080), vec![1001, 1002]);
     }
 }

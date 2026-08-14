@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use libbpf_rs::OpenObject;
 
 use cli::{LongRunningArgs, RunMode};
@@ -126,7 +126,26 @@ fn map_edit_port_lists(args: &LongRunningArgs) -> Result<(Vec<u16>, Vec<u16>)> {
     Ok((http, tls))
 }
 
+fn acquire_pin_exclusive(pin_dir: &std::path::Path) -> Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    std::fs::create_dir_all(pin_dir)
+        .with_context(|| format!("create pin dir {}", pin_dir.display()))?;
+    let path = pin_dir.join(".loader.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc != 0 {
+        bail!("another loader owns pin directory {}; refusing to load/attach/pin", pin_dir.display());
+    }
+    log_msg(format_args!("exclusive loader lock acquired: {}", path.display()));
+    Ok(file)
+}
+
 fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs) -> Result<()> {
+    let _pin_lock = acquire_pin_exclusive(&args.pin_dir)?;
     let (mut bpf, _link) = load::load_and_attach(open_object, args.bpf_impl)?;
 
     let desired = if args.ports_file.exists() {
@@ -168,14 +187,16 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let reload = Arc::new(AtomicBool::new(false));
+    let rescan = Arc::new(AtomicBool::new(false));
     let mutations = Arc::new(std::sync::Mutex::new(()));
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&shutdown))?;
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&shutdown))?;
     signal_hook::flag::register(signal_hook::consts::SIGQUIT, Arc::clone(&shutdown))?;
     signal_hook::flag::register(signal_hook::consts::SIGHUP, Arc::clone(&reload))?;
+    signal_hook::flag::register(signal_hook::consts::SIGUSR1, Arc::clone(&rescan))?;
 
     // Hold listen FDs so SOCKMAP entries stay valid (same as Go keeping *os.File).
-    let mut _held_fds = Vec::new();
+    let mut held_fds = Vec::new();
     match args.mode {
         RunMode::Toy => {
             let fd = bpf.with_maps(|open_ports, redir_socket| {
@@ -191,7 +212,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
                     "toy mode maps desired `tls` entries to its HTTP socket"
                 ));
             }
-            _held_fds.push(fd);
+            held_fds.push(fd);
         }
         RunMode::OpenResty => {
             let fds = bpf.with_maps(|open_ports, redir_socket| {
@@ -200,7 +221,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
                     &tls_ports, args.wait, &shutdown,
                 )
             })?;
-            _held_fds.extend(fds);
+            held_fds.extend(fds);
         }
         RunMode::ClosePort | RunMode::OpenPort | RunMode::DumpPorts => {
             unreachable!("attached path")
@@ -239,6 +260,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         }
     };
 
+    let mut next_rescan = std::time::Instant::now() + Duration::from_secs(2);
     while !shutdown.load(Ordering::SeqCst) {
         if reload.swap(false, Ordering::SeqCst) {
             let _guard = mutations.lock().map_err(|_| anyhow::anyhow!("mutation lock poisoned"))?;
@@ -253,6 +275,21 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
                 )),
                 Err(err) => log_msg(format_args!("SIGHUP reconcile failed: {err:#}")),
             }
+        }
+        if matches!(args.mode, RunMode::OpenResty)
+            && (rescan.swap(false, Ordering::SeqCst) || std::time::Instant::now() >= next_rescan)
+        {
+            let tls = (!tls_ports.is_empty()).then_some(args.tls_target.as_str());
+            match bpf.with_maps(|_open_ports, redir_socket| {
+                openresty::rescan_held(redir_socket, &args.target, tls, &mut held_fds)
+            }) {
+                Ok(n) if n > 0 => log_msg(format_args!(
+                    "listen rescan changed {n} slot(s); open_ports unchanged"
+                )),
+                Ok(_) => {}
+                Err(err) => log_msg(format_args!("listen rescan failed (will retry): {err:#}")),
+            }
+            next_rescan = std::time::Instant::now() + Duration::from_secs(2);
         }
         thread::sleep(Duration::from_millis(200));
     }
