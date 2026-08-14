@@ -155,6 +155,10 @@ build_loader() {
 start_loader() {
   mkdir -p "$(state_dir)"
   local tls_args=()
+  local bpf_args=()
+  if [[ -n "${BPF_IMPL:-}" ]]; then
+    bpf_args=(-bpf "$BPF_IMPL")
+  fi
   if [[ -n "${LOADER_TLS_PORTS}" ]]; then
     tls_args=(-tls-target "$TLS_TARGET" -tls-ports "$LOADER_TLS_PORTS")
   fi
@@ -163,6 +167,7 @@ start_loader() {
     -target "$TARGET" \
     -ports "$LOADER_PORTS" \
     -ports-file "$PORTS_FILE" \
+    "${bpf_args[@]}" \
     "${tls_args[@]}" \
     -wait "$WAIT" \
     -pin-dir "$PIN_DIR" \

@@ -1,4 +1,4 @@
-//! Rust userspace loader. Hot path stays C BPF (`dispatch.bpf.c`).
+//! Rust userspace loader. C BPF remains default; `-bpf rust` selects its Rust twin.
 //! This is the default loader and can be selected via `LOADER_BIN`.
 
 mod bulk;
@@ -127,7 +127,7 @@ fn map_edit_port_lists(args: &LongRunningArgs) -> Result<(Vec<u16>, Vec<u16>)> {
 }
 
 fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs) -> Result<()> {
-    let (mut skel, _link) = load::load_and_attach(open_object)?;
+    let (mut bpf, _link) = load::load_and_attach(open_object, args.bpf_impl)?;
 
     let desired = if args.ports_file.exists() {
         let state = desired::load(&args.ports_file)?;
@@ -159,7 +159,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         .collect();
 
     let pin_fatal = matches!(args.mode, RunMode::OpenResty);
-    let pinned = load::pin_or_warn(&mut skel, &args.pin_dir, pin_fatal)?;
+    let pinned = load::pin_or_warn(&mut bpf, &args.pin_dir, pin_fatal)?;
     let _unpin = pin::UnpinOnDrop(if pinned {
         Some(args.pin_dir.clone())
     } else {
@@ -178,19 +178,15 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
     let mut _held_fds = Vec::new();
     match args.mode {
         RunMode::Toy => {
-            let fd = toy::run_toy_mode(&skel, &args.listen, &steered, &shutdown)?;
+            let fd = bpf.with_maps(|open_ports, redir_socket| {
+                toy::run_toy_mode(open_ports, redir_socket, &args.listen, &steered, &shutdown)
+            })?;
             if !tls_ports.is_empty() {
                 use std::os::fd::AsRawFd;
-                load::register_listen_fd(
-                    &skel.maps.redir_socket,
-                    fd.as_raw_fd(),
-                    pin::REDIR_TLS,
-                )?;
-                load::open_steered_ports(
-                    &skel.maps.open_ports,
-                    &tls_ports,
-                    pin::REDIR_TLS as u8,
-                )?;
+                bpf.with_maps(|open_ports, redir_socket| {
+                    load::register_listen_fd(redir_socket, fd.as_raw_fd(), pin::REDIR_TLS)?;
+                    load::open_steered_ports(open_ports, &tls_ports, pin::REDIR_TLS as u8)
+                })?;
                 log_msg(format_args!(
                     "toy mode maps desired `tls` entries to its HTTP socket"
                 ));
@@ -198,15 +194,12 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
             _held_fds.push(fd);
         }
         RunMode::OpenResty => {
-            let fds = openresty::run_openresty_mode(
-                &skel,
-                &args.target,
-                &steered,
-                &args.tls_target,
-                &tls_ports,
-                args.wait,
-                &shutdown,
-            )?;
+            let fds = bpf.with_maps(|open_ports, redir_socket| {
+                openresty::run_openresty_mode(
+                    open_ports, redir_socket, &args.target, &steered, &args.tls_target,
+                    &tls_ports, args.wait, &shutdown,
+                )
+            })?;
             _held_fds.extend(fds);
         }
         RunMode::ClosePort | RunMode::OpenPort | RunMode::DumpPorts => {
@@ -214,7 +207,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         }
     }
 
-    let initial = desired::reconcile_map(&skel.maps.open_ports, &desired)?;
+    let initial = bpf.with_open_ports(|map| desired::reconcile_map(map, &desired))?;
     log_msg(format_args!(
         "desired-state reconcile: put={} delete={} file={}",
         initial.put_primary.len() + initial.put_tls.len(),
@@ -250,7 +243,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         if reload.swap(false, Ordering::SeqCst) {
             let _guard = mutations.lock().map_err(|_| anyhow::anyhow!("mutation lock poisoned"))?;
             match desired::load(&args.ports_file)
-                .and_then(|state| desired::reconcile_map(&skel.maps.open_ports, &state))
+                .and_then(|state| bpf.with_open_ports(|map| desired::reconcile_map(map, &state)))
             {
                 Ok(plan) => log_msg(format_args!(
                     "SIGHUP reconcile: put={} delete={} file={}",

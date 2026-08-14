@@ -1,5 +1,5 @@
 .PHONY: generate build run run-toy run-openresty verify-openresty stop-openresty test clean certs \
-	httpbench rust-loader rust-loader-test \
+	httpbench rust-loader rust-loader-test rust-bpf \
 	httpbench accept-prod-p0 accept-prod-p0-cps-tls accept-prod-p0-long-p99 \
 	accept-prod-p0-loader-lifecycle accept-prod-p0-hot-ports \
 	accept-prod-p1 accept-prod-p1-map-bytes accept-prod-p1-reuseport \
@@ -25,6 +25,11 @@ rust-loader: build
 
 rust-loader-test:
 	cargo test --manifest-path rust/loader/Cargo.toml
+
+# Rust source twin of dispatch.bpf.c. Requires nightly + rust-src; C stays default.
+rust-bpf:
+	cargo +nightly build --release -Z build-std=core --target bpfel-unknown-none --manifest-path rust/bpf/Cargo.toml
+	cp rust/bpf/target/bpfel-unknown-none/release/dispatch-rust rust/bpf/target/bpfel-unknown-none/release/dispatch-rust.o
 
 certs:
 	chmod +x openresty/certs/gen-demo-certs.sh
@@ -138,3 +143,4 @@ clean:
 	rm -f waf-sklookup-demo dispatch_bpfel.go dispatch_bpfel.o dispatch_bpfeb.go dispatch_bpfeb.o
 	rm -f bin/httpbench
 	rm -rf rust/loader/target
+	rm -rf rust/bpf/target

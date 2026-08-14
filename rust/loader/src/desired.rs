@@ -147,7 +147,7 @@ pub fn plan(desired: &DesiredPorts, current: &HashMap<u16, u8>) -> ReconcilePlan
     plan
 }
 
-pub fn read_map(map: &impl MapCore) -> Result<HashMap<u16, u8>> {
+pub fn read_map(map: &(impl MapCore + ?Sized)) -> Result<HashMap<u16, u8>> {
     let mut current = HashMap::new();
     for key in map.keys() {
         let port = match key.as_slice() {
@@ -162,7 +162,10 @@ pub fn read_map(map: &impl MapCore) -> Result<HashMap<u16, u8>> {
 }
 
 /// Reconcile any loaded `open_ports` map. Pinned-map ctl uses the batched variant in `ctl`.
-pub fn reconcile_map(map: &impl MapCore, desired: &DesiredPorts) -> Result<ReconcilePlan> {
+pub fn reconcile_map(
+    map: &(impl MapCore + ?Sized),
+    desired: &DesiredPorts,
+) -> Result<ReconcilePlan> {
     let plan = plan(desired, &read_map(map)?);
     for (ports, slot) in [
         (&plan.put_primary, REDIR_PRIMARY as u8),

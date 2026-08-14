@@ -7,6 +7,22 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BpfImpl {
+    C,
+    Rust,
+}
+
+impl BpfImpl {
+    fn parse(s: &str) -> Result<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "c" => Ok(Self::C),
+            "rust" => Ok(Self::Rust),
+            other => bail!("invalid -bpf value {other:?} (want c or rust)"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunMode {
     Toy,
     OpenResty,
@@ -32,6 +48,7 @@ impl RunMode {
 
 #[derive(Debug, Clone)]
 pub struct LongRunningArgs {
+    pub bpf_impl: BpfImpl,
     pub mode: RunMode,
     pub listen: String,
     pub target: String,
@@ -183,6 +200,7 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
             "ports-file",
             "ctl-sock",
             "ctl-group",
+            "bpf",
         ],
     )?;
     if flags.bool_flag("help") {
@@ -190,6 +208,11 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
         std::process::exit(0);
     }
     let mode = RunMode::parse(flags.get("mode").unwrap_or("toy"))?;
+    let bpf_raw = flags
+        .get("bpf")
+        .map(str::to_owned)
+        .or_else(|| std::env::var("BPF_IMPL").ok())
+        .unwrap_or_else(|| "c".into());
     let wait_raw = flags.get("wait").unwrap_or("60s");
     let ctl_raw = flags.get("ctl-sock").map(str::to_owned).unwrap_or_else(|| {
         std::env::var("CTL_SOCK").unwrap_or_else(|_| crate::sockctl::DEFAULT_CTL_SOCK.into())
@@ -197,6 +220,7 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
     let ctl_group = flags.get("ctl-group").map(str::parse).transpose()
         .context("bad -ctl-group (numeric gid required)")?;
     Ok(LongRunningArgs {
+        bpf_impl: BpfImpl::parse(&bpf_raw)?,
         mode,
         listen: flags.get("listen").unwrap_or("127.0.0.1:18080").to_string(),
         target: flags.get("target").unwrap_or("127.0.0.1:8080").to_string(),
@@ -275,7 +299,8 @@ pub fn print_long_running_usage() {
         "Usage: {bin} [flags]                    # long-running toy / openresty\n\
          {pad} {bin} ctl ...                    # product control plane (Unix socket)\n\
          {pad} {bin} <add|remove|list|bulk> ... # root CLI escape hatch (pinned maps)\n\n\
-         Rust userspace loader. Hot path is still C BPF (dispatch.bpf.c).\n\n\
+         Rust userspace loader with selectable C/Rust BPF dataplanes.\n\n\
+           -bpf string\n        c | rust (default \"c\"; env BPF_IMPL when omitted)\n\
            -mode string\n        toy | openresty | close-port | open-port | dump-ports (default \"toy\")\n\
            -listen string\n        toy mode: real server listen address (default \"127.0.0.1:18080\")\n\
            -target string\n        openresty mode: primary internal listen (default \"127.0.0.1:8080\")\n\
@@ -339,5 +364,19 @@ mod tests {
         let f = parse_go_flags(&argv, &[], &["mode", "ports"]).unwrap();
         assert_eq!(f.get("mode"), Some("openresty"));
         assert!(f.flag_set("ports"));
+    }
+
+    #[test]
+    fn bpf_impl_default_flag_and_env() {
+        std::env::remove_var("BPF_IMPL");
+        assert_eq!(parse_long_running(&[]).unwrap().bpf_impl, BpfImpl::C);
+        let args = vec!["--bpf=rust".into()];
+        assert_eq!(parse_long_running(&args).unwrap().bpf_impl, BpfImpl::Rust);
+        std::env::set_var("BPF_IMPL", "rust");
+        assert_eq!(parse_long_running(&[]).unwrap().bpf_impl, BpfImpl::Rust);
+        let args = vec!["-bpf".into(), "c".into()];
+        assert_eq!(parse_long_running(&args).unwrap().bpf_impl, BpfImpl::C);
+        std::env::remove_var("BPF_IMPL");
+        assert!(parse_long_running(&["-bpf=wat".into()]).is_err());
     }
 }
