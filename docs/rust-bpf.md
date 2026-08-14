@@ -46,10 +46,9 @@ not distributed:
 cargo build --release --manifest-path rust/loader/Cargo.toml
 ```
 
-The setup script installs the pinned Rust 1.85.0 userspace toolchain, nightly
-with `rust-src`, and missing Debian/Ubuntu C BPF build packages. It is safe to
-run again; the equivalent manual nightly setup is
-`rustup toolchain install nightly --profile minimal --component rust-src`.
+The PATH-first setup script puts `$HOME/.cargo/bin` ahead of the system Rust so
+the rustup nightly toolchain wins over Debian's Rust 1.85.0. It is safe to run
+again and skips rustup installation when nightly and `rust-src` already exist.
 
 `make rust-bpf` writes
 `rust/bpf/target/bpfel-unknown-none/release/dispatch-rust.o`. The loader embeds
