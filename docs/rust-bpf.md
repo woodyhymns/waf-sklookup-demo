@@ -49,9 +49,10 @@ cargo build --release --manifest-path rust/loader/Cargo.toml
 The PATH-first setup script puts `$HOME/.cargo/bin` ahead of the system Rust so
 the rustup nightly toolchain wins over Debian's Rust 1.85.0. It is safe to run
 again and skips rustup installation when nightly and `rust-src` already exist.
-The Rust BPF build uses `bpf-linker --btf`, then narrowly patches its `.BTF`
-string table so the map attribute has libbpf's C field name `type` (rustc emits
-the raw Rust identifier as `type_`).
+The Rust BPF build uses `bpf-linker --btf`, then post-processes the object so
+libbpf can load it: the `.BTF` string table uses the C map-attribute name
+`type` (rustc emits the raw identifier as `type_`), and the two `.maps`
+sections are merged into one the way clang emits `dispatch.bpf.c`.
 
 `make rust-bpf` writes
 `rust/bpf/target/bpfel-unknown-none/release/dispatch-rust.o`. The loader embeds
