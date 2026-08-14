@@ -42,17 +42,16 @@ The Rust object needs a nightly compiler with `rust-src`; the BPF target builds
 not distributed:
 
 ```sh
-rustup toolchain install nightly --profile minimal --component rust-src
-make rust-bpf
+./scripts/setup-build.sh && make rust-bpf
 cargo build --release --manifest-path rust/loader/Cargo.toml
 ```
+
+The setup script installs the pinned Rust 1.85.0 userspace toolchain, nightly
+with `rust-src`, and missing Debian/Ubuntu C BPF build packages. It is safe to
+run again; the equivalent manual nightly setup is
+`rustup toolchain install nightly --profile minimal --component rust-src`.
 
 `make rust-bpf` writes
 `rust/bpf/target/bpfel-unknown-none/release/dispatch-rust.o`. The loader embeds
 that repository path at userspace build time. Rebuild the loader after moving
 the checkout.
-
-The current demo host intentionally does not install rustup/nightly as part of
-the normal C-default build. `cargo test --manifest-path rust/loader/Cargo.toml`
-therefore continues to compile and test the C-default userspace path without
-building the optional Rust object.

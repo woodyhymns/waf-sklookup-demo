@@ -131,6 +131,8 @@ or performance claim. Isolated steering tax is an **absolute** A vs B delta
 (direct `:8080` vs steered port), not a G2 keepalive relative ratio. See
 [`docs/rust-bpf.md`](docs/rust-bpf.md) for the shared ABI and build steps.
 
+Optional Rust BPF object: `./scripts/setup-build.sh && make rust-bpf` (see [`docs/rust-bpf.md`](docs/rust-bpf.md)).
+
 ```bash
 make build
 ./run-openresty-demo.sh start
