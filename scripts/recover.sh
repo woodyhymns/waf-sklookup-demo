@@ -27,7 +27,7 @@ HINTS="loader|pin-race|master|openresty|worker|worker-storm|pin|pins|bpffs|sockm
 
 usage() {
   echo "Usage: $0 [--count N] [$HINTS]" >&2
-  echo "No argument auto-detects the smallest repair. Hints select a path but still refuse unsafe actions." >&2
+  echo "A case name is required. Reboot recovery runs only via $0 reboot. No argument or an unknown argument prints usage and exits 2 with no recovery." >&2
 }
 
 while (( $# )); do
@@ -42,6 +42,11 @@ while (( $# )); do
     *) usage; exit 2 ;;
   esac
 done
+
+if [[ -z "$HINT" ]]; then
+  usage
+  exit 2
+fi
 
 if (( PROBE_COUNT > 10000 )) && [[ "${M3_FULL_LADDER:-0}" != "1" ]]; then
   echo "COUNT=$PROBE_COUNT is disabled on shared machines; set M3_FULL_LADDER=1 explicitly." >&2
@@ -293,7 +298,7 @@ start_openresty_only() {
 
 start_loader_only() {
   if loader_up; then
-    echo "one loader is already running; a second long-running loader is refused by $PIN_DIR/.loader.lock"
+    echo "one loader is already running; a second long-running loader is refused by /run/waf-sklookup/loader.lock"
     return 0
   fi
   ensure_loader_bin
@@ -310,7 +315,7 @@ start_loader_only() {
   local i
   for i in $(seq 1 120); do
     if [[ ! -d "/proc/$pid" ]]; then
-      if grep -q 'another loader owns pin directory' "$STATE_DIR/loader.log" 2>/dev/null; then
+      if grep -q 'another loader owns' "$STATE_DIR/loader.log" 2>/dev/null; then
         fail "second loader refused (pin race); existing owner kept"
         return 1
       fi
@@ -481,7 +486,7 @@ case "$HINT" in
   pin-race)
     say_case pin-race
     if loader_up; then
-      echo "one loader is running; a second long-running loader is refused by $PIN_DIR/.loader.lock"
+      echo "one loader is running; a second long-running loader is refused by /run/waf-sklookup/loader.lock"
       exit 0
     fi
     start_loader_only

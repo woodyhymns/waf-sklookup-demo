@@ -126,11 +126,12 @@ fn map_edit_port_lists(args: &LongRunningArgs) -> Result<(Vec<u16>, Vec<u16>)> {
     Ok((http, tls))
 }
 
-fn acquire_pin_exclusive(pin_dir: &std::path::Path) -> Result<std::fs::File> {
+fn acquire_loader_lock() -> Result<std::fs::File> {
     use std::os::fd::AsRawFd;
-    std::fs::create_dir_all(pin_dir)
-        .with_context(|| format!("create pin dir {}", pin_dir.display()))?;
-    let path = pin_dir.join(".loader.lock");
+    let lock_dir = std::path::Path::new("/run/waf-sklookup");
+    std::fs::create_dir_all(lock_dir)
+        .with_context(|| format!("create lock dir {}", lock_dir.display()))?;
+    let path = lock_dir.join("loader.lock");
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -138,14 +139,17 @@ fn acquire_pin_exclusive(pin_dir: &std::path::Path) -> Result<std::fs::File> {
         .with_context(|| format!("open {}", path.display()))?;
     let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if rc != 0 {
-        bail!("another loader owns pin directory {}; refusing to load/attach/pin", pin_dir.display());
+        bail!(
+            "another loader owns {}; refusing to load/attach/pin",
+            path.display()
+        );
     }
     log_msg(format_args!("exclusive loader lock acquired: {}", path.display()));
     Ok(file)
 }
 
 fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs) -> Result<()> {
-    let _pin_lock = acquire_pin_exclusive(&args.pin_dir)?;
+    let _pin_lock = acquire_loader_lock()?;
     let (mut bpf, _link) = load::load_and_attach(open_object, args.bpf_impl)?;
 
     let desired = if args.ports_file.exists() {

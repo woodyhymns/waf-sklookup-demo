@@ -50,11 +50,11 @@ master, or OpenResty; detach BPF; reconcile as a side effect; or touch
 `open_ports`. It does not migrate established connections on other workers.
 Sessions on the dead worker drop, as with nginx.
 
-With no argument, a detected respawn takes this same rescan-only path and exits
-without reconcile or loader restart when the listener, loader, pins, and
-control socket otherwise look healthy. The underlying operation is
-`waf-sklookup-loader rescan-listen`; if the master/listener is actually down,
-use the frontend-only `run-openresty-demo.sh start-openresty-only` path instead.
+With no argument, the helper prints usage and exits 2; it does not auto-detect
+or recover. Worker-respawn recovery is `scripts/recover.sh worker` only. The
+underlying operation is `waf-sklookup-loader rescan-listen`; if the
+master/listener is actually down, use the frontend-only
+`run-openresty-demo.sh start-openresty-only` path instead.
 
 ## 1. Loader kill, OOM, or abnormal exit
 
@@ -66,11 +66,14 @@ use the frontend-only `run-openresty-demo.sh start-openresty-only` path instead.
 
 ## 2. Two loaders racing for pins
 
-- See: the second loader exits saying another loader owns the pin-directory lock.
+- See: the second loader exits saying another loader owns
+  `/run/waf-sklookup/loader.lock`.
 - Recover: `sudo -E scripts/recover.sh pin-race` (it keeps the existing owner).
-- Confirm: exactly one loader is alive. The exclusive nonblocking flock is held
-  for the attach owner's lifetime; ctl/rescan/reconcile one-shots do not take
-  it. Do not migrate established connections.
+- Confirm: exactly one loader is alive. The exclusive nonblocking flock is
+  `/run/waf-sklookup/loader.lock` on a normal filesystem, not a file on
+  bpffs/pin-dir; it is held for the attach owner's lifetime.
+  ctl/rescan/reconcile one-shots do not take it. Do not migrate established
+  connections.
 
 ## 3. OpenResty master fully dead
 
@@ -171,7 +174,9 @@ use the frontend-only `run-openresty-demo.sh start-openresty-only` path instead.
 
 ## Helper reference
 
-No argument auto-detects and prints the smallest selected case. Hints are
+A case name is required. No argument or an unknown argument prints usage and
+exits 2 with no recovery. Reboot recovery runs only via
+`scripts/recover.sh reboot`. Hints are
 `loader`, `pin-race`, `master`/`openresty`, `worker`, `worker-storm`,
 `pin`/`bpffs`, `sockmap`, `ctl`, `state`/`reconcile`, `boot-wait`,
 `boot-loader`, `start-limit`, `reboot`, and the read-only `detect-worker`.
