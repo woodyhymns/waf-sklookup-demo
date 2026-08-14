@@ -8,14 +8,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use libbpf_rs::MapCore;
 
-use crate::dispatch::DispatchSkel;
 use crate::listen_fd;
 use crate::load::{open_steered_ports, register_listen_fd};
 use crate::pin::{REDIR_PRIMARY, REDIR_TLS};
 
 pub fn run_openresty_mode(
-    skel: &DispatchSkel<'_>,
+    open_ports: &dyn MapCore,
+    redir_socket: &dyn MapCore,
     target_addr: &str,
     steered_ports: &[u16],
     tls_target_addr: &str,
@@ -35,18 +36,18 @@ pub fn run_openresty_mode(
     let mut held = Vec::new();
     let http_file = wait_for_listen_socket(target_addr, wait, shutdown)?;
     register_listen_fd(
-        &skel.maps.redir_socket,
+        redir_socket,
         http_file.as_raw_fd(),
         REDIR_PRIMARY,
     )?;
-    open_steered_ports(&skel.maps.open_ports, steered_ports, REDIR_PRIMARY as u8)?;
+    open_steered_ports(open_ports, steered_ports, REDIR_PRIMARY as u8)?;
     held.push(http_file);
 
     if !tls_ports.is_empty() {
         let tls_file = wait_for_listen_socket(tls_target_addr, wait, shutdown)
             .context("stock TLS fallback listen")?;
-        register_listen_fd(&skel.maps.redir_socket, tls_file.as_raw_fd(), REDIR_TLS)?;
-        open_steered_ports(&skel.maps.open_ports, tls_ports, REDIR_TLS as u8)?;
+        register_listen_fd(redir_socket, tls_file.as_raw_fd(), REDIR_TLS)?;
+        open_steered_ports(open_ports, tls_ports, REDIR_TLS as u8)?;
         held.push(tls_file);
     }
 

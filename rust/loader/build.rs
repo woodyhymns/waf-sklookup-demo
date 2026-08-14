@@ -38,4 +38,10 @@ fn main() {
         "cargo:rerun-if-changed={}",
         headers.join("bpf_helpers.h").display()
     );
+    println!(
+        "cargo:rustc-env=RUST_BPF_OBJECT_PATH={}",
+        repo_root
+            .join("rust/bpf/target/bpfel-unknown-none/release/dispatch-rust.o")
+            .display()
+    );
 }

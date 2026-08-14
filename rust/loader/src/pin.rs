@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use libbpf_rs::MapCore;
 
-use crate::dispatch::DispatchSkel;
+use crate::load::LoadedBpf;
 
 pub const DEFAULT_PIN_DIR: &str = "/sys/fs/bpf/waf-sklookup";
 pub const OPEN_PORTS_MAP: &str = "open_ports";
@@ -28,16 +28,35 @@ pub fn redir_socket_path(pin_dir: impl AsRef<Path>) -> PathBuf {
 }
 
 /// Pin `open_ports` + `redir_socket`. Unlink stale pins first (same as Go).
-pub fn pin_maps(dir: &Path, skel: &mut DispatchSkel<'_>) -> Result<()> {
+pub fn pin_maps(dir: &Path, bpf: &mut LoadedBpf<'_>) -> Result<()> {
     fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
     let _ = fs::remove_file(open_ports_path(dir));
     let _ = fs::remove_file(redir_socket_path(dir));
-    skel.maps
-        .open_ports
-        .pin(open_ports_path(dir))
-        .with_context(|| format!("pin {}", open_ports_path(dir).display()))?;
-    if let Err(err) = skel.maps.redir_socket.pin(redir_socket_path(dir)) {
-        let _ = skel.maps.open_ports.unpin(open_ports_path(dir));
+    let result = match bpf {
+        LoadedBpf::C(skel) => {
+            skel.maps
+                .open_ports
+                .pin(open_ports_path(dir))
+                .with_context(|| format!("pin {}", open_ports_path(dir).display()))?;
+            skel.maps.redir_socket.pin(redir_socket_path(dir))
+        }
+        LoadedBpf::Rust(obj) => {
+            let mut open_ports = obj
+                .maps_mut()
+                .find(|m| m.name() == OPEN_PORTS_MAP)
+                .context("Rust BPF object missing map open_ports")?;
+            open_ports
+                .pin(open_ports_path(dir))
+                .with_context(|| format!("pin {}", open_ports_path(dir).display()))?;
+            let mut redir_socket = obj
+                .maps_mut()
+                .find(|m| m.name() == REDIR_SOCKET_MAP)
+                .context("Rust BPF object missing map redir_socket")?;
+            redir_socket.pin(redir_socket_path(dir))
+        }
+    };
+    if let Err(err) = result {
+        let _ = fs::remove_file(open_ports_path(dir));
         return Err(err).with_context(|| format!("pin {}", redir_socket_path(dir).display()));
     }
     Ok(())
@@ -53,7 +72,7 @@ pub fn assert_open_ports_max_entries(map: &impl MapCore) -> Result<()> {
     let got = map.max_entries();
     if got != OPEN_PORTS_MAX_ENTRIES {
         anyhow::bail!(
-            "open_ports max_entries={got} want {OPEN_PORTS_MAX_ENTRIES} (rebuild from dispatch.bpf.c)"
+            "open_ports max_entries={got} want {OPEN_PORTS_MAX_ENTRIES} (rebuild the selected BPF object)"
         );
     }
     Ok(())

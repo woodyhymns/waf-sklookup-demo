@@ -1,0 +1,20 @@
+[package]
+name = "dispatch-rust"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-only"
+publish = false
+
+[[bin]]
+name = "dispatch-rust"
+path = "src/lib.rs"
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = true
+opt-level = 2
+panic = "abort"
+strip = false
+
+[workspace]

@@ -124,7 +124,14 @@ Details, file/stdin input, map ceiling (**131072**, ~8–16 MB memlock), and HAH
 
 ## Rust userspace loader
 
-Rust is the default userspace loader. It uses the same C BPF (`dispatch.bpf.c`), so the userspace rewrite alone is not a QPS/P99 claim. Isolated steering tax is an **absolute** A vs B delta (direct `:8080` vs steered port), not a G2 keepalive relative ratio.
+Rust is the default userspace loader. Its dataplane defaults to the C BPF
+(`dispatch.bpf.c`); select the source-equivalent Rust BPF twin with `-bpf rust`
+or `BPF_IMPL=rust`. This is a **source-language comparison**, not a QPS promise
+or performance claim. Isolated steering tax is an **absolute** A vs B delta
+(direct `:8080` vs steered port), not a G2 keepalive relative ratio. See
+[`docs/rust-bpf.md`](docs/rust-bpf.md) for the shared ABI and build steps.
+
+Optional Rust BPF object: `./scripts/setup-build.sh && make rust-bpf` (see [`docs/rust-bpf.md`](docs/rust-bpf.md)).
 
 ```bash
 make build

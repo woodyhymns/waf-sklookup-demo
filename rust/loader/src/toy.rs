@@ -8,14 +8,15 @@ use std::sync::Arc;
 use std::thread;
 
 use anyhow::{Context, Result};
+use libbpf_rs::MapCore;
 
-use crate::dispatch::DispatchSkel;
 use crate::listen_fd;
 use crate::load::{open_steered_ports, register_listen_fd};
 use crate::pin::REDIR_PRIMARY;
 
 pub fn run_toy_mode(
-    skel: &DispatchSkel<'_>,
+    open_ports: &dyn MapCore,
+    redir_socket: &dyn MapCore,
     listen_addr: &str,
     steered_ports: &[u16],
     shutdown: &Arc<AtomicBool>,
@@ -23,8 +24,8 @@ pub fn run_toy_mode(
     let listener =
         TcpListener::bind(listen_addr).with_context(|| format!("listen {listen_addr}"))?;
     let held = listen_fd::dup_fd(&listener)?;
-    register_listen_fd(&skel.maps.redir_socket, held.as_raw_fd(), REDIR_PRIMARY)?;
-    open_steered_ports(&skel.maps.open_ports, steered_ports, REDIR_PRIMARY as u8)?;
+    register_listen_fd(redir_socket, held.as_raw_fd(), REDIR_PRIMARY)?;
+    open_steered_ports(open_ports, steered_ports, REDIR_PRIMARY as u8)?;
 
     let listen_owned = listen_addr.to_string();
     let stop = Arc::clone(shutdown);

@@ -1,6 +1,8 @@
 # Rust userspace loader
 
-**Status:** Rust is the default and only userspace loader. The hot path remains the C BPF program in `dispatch.bpf.c`; the OpenResty and Lua layers are unchanged.
+**Status:** Rust is the default and only userspace loader. The hot path defaults
+to the C BPF program in `dispatch.bpf.c`, with a source-equivalent Rust BPF
+object selectable at load time. The OpenResty and Lua layers are unchanged.
 
 The loader lives in `rust/loader` and builds as:
 
@@ -10,7 +12,15 @@ cargo build --release --manifest-path rust/loader/Cargo.toml
 
 Its default path is `./rust/loader/target/release/waf-sklookup-loader`. `make`, `make build`, `./run.sh`, `run-openresty-demo.sh`, and the acceptance helpers all use that binary. `LOADER_BIN` remains available when a caller needs an explicit executable path.
 
-The crate compiles the repository-root `dispatch.bpf.c` through `libbpf-cargo`. It supports toy and OpenResty long-running modes, pinned-map `add`/`remove`/`list`, and bulk range/file/stdin/fill operations. The CLI retains Go-style single-dash flags for script compatibility.
+The crate compiles the repository-root `dispatch.bpf.c` through `libbpf-cargo`.
+That C skeleton remains the default. `-bpf rust` opens the separately built
+`rust/bpf` ELF through the same libbpf-rs stack. It supports toy and OpenResty
+long-running modes, pinned-map `add`/`remove`/`list`, and bulk
+range/file/stdin/fill operations. The CLI retains Go-style single-dash flags
+for script compatibility.
+
+This option exists for a source-language comparison. It makes no QPS, latency,
+or other performance claim. See `docs/rust-bpf.md`.
 
 Build requirements are rustc 1.85+, Cargo, clang, libbpf/libelf development files, and Linux headers. Go is not part of the loader build; it is only used for the standalone `tools/httpbench` helper.
 
