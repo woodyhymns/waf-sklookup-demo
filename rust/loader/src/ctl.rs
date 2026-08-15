@@ -35,9 +35,12 @@ Root CLI escape hatch (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-loader unfreeze [-freeze-file /run/waf-sklookup/frozen]
   sudo ./waf-sklookup-loader close-all [-pin-dir DIR]
   sudo ./waf-sklookup-loader rescan-listen [-target 127.0.0.1:8080] [-tls-target ADDR]
-  sudo ./waf-sklookup-loader import-listens -tenant TENANT -site SITE [-nginx-conf PATH] [--dry-run]
+  sudo ./waf-sklookup-loader import-listen|import-listens -tenant TENANT -site SITE [-nginx-conf PATH] [--dry-run]
+  sudo ./waf-sklookup-loader migrate --from-nginx -tenant TENANT -site SITE [-nginx-conf PATH]
+  sudo ./waf-sklookup-loader migrate --drop-listen [PORT] [-nginx-conf PATH]   # dry-run only
   sudo ./waf-sklookup-loader check-overlap [-nginx-conf PATH] [-ports-file ports.conf]
   sudo ./waf-sklookup-loader retire-conf-listen PORT [-nginx-conf PATH]
+  sudo ./waf-sklookup-loader list -virtual [-nginx-conf PATH] [-ports-file ports.conf]
   sudo ./waf-sklookup-loader status|metrics [-nginx-conf PATH] [-ports-file ports.conf]
 
 Mutating commands update the desired file (default ports.conf) and the pinned map.
@@ -50,7 +53,7 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
     if args.is_empty() {
         bail!("{}", CTL_USAGE.trim());
     }
-    let mutation = matches!(args[0].as_str(), "add"|"open"|"remove"|"close"|"load-ports"|"close-ports"|"bulk"|"fill"|"reconcile"|"apply"|"apply-central"|"freeze"|"unfreeze"|"close-all"|"import-listens");
+    let mutation = matches!(args[0].as_str(), "add"|"open"|"remove"|"close"|"load-ports"|"close-ports"|"bulk"|"fill"|"reconcile"|"apply"|"apply-central"|"freeze"|"unfreeze"|"close-all"|"import-listens"|"import-listen"|"migrate");
     let result = match args[0].as_str() {
         "add" | "open" => ctl_add(&args[1..]),
         "remove" | "close" => ctl_remove(&args[1..]),
@@ -67,7 +70,8 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
         "unfreeze" => ctl_unfreeze(&args[1..]),
         "close-all" => ctl_close_all(&args[1..]),
         "rescan-listen" => ctl_rescan_listen(&args[1..]),
-        "import-listens" => ctl_import_listens(&args[1..]),
+        "import-listens" | "import-listen" => ctl_import_listens(&args[1..]),
+        "migrate" => ctl_migrate(&args[1..]),
         "check-overlap" => ctl_check_overlap(&args[1..]),
         "retire-conf-listen" => ctl_retire_conf_listen(&args[1..]),
         "status" | "metrics" => ctl_status(&args[1..]),
@@ -116,32 +120,61 @@ fn ctl_rescan_listen(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn import_binding(flags: &ParsedFlags) -> Result<PortBinding> {
+    let tenant = flags.get("tenant").map(str::to_owned).or_else(|| std::env::var("TENANT").ok()).unwrap_or_default();
+    let site = flags.get("site").map(str::to_owned).or_else(|| std::env::var("SITE").ok()).unwrap_or_default();
+    if tenant.is_empty() || site.is_empty() {
+        bail!("import-listen requires -tenant and -site (or TENANT/SITE env); unbound lines are never written");
+    }
+    Ok(PortBinding { slot: ctl_slot(flags.bool_flag("tls")), tenant, site, cert: flags.get("cert").map(str::to_owned), policy: flags.get("policy").map(str::to_owned) })
+}
+
 fn ctl_import_listens(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["tls", "dry-run", "help"], &["nginx-conf", "tenant", "site", "cert", "policy", "ports-file", "policy-file", "freeze-file", "central-out", "metrics-file"])?;
+    let flags = parse_go_flags(args, &["tls", "dry-run", "from-nginx", "help"], &["nginx-conf", "from", "tenant", "site", "cert", "policy", "ports-file", "policy-file", "freeze-file", "central-out", "metrics-file", "skip"])?;
     if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
-    let binding = binding_from_flags(&flags).map_err(|_| anyhow::anyhow!("import-listens requires -tenant and -site"))?;
-    let conf = nginx_conf_of(&flags);
+    let binding = import_binding(&flags)?;
+    let conf = flags.get("from").map(PathBuf::from).unwrap_or_else(|| nginx_conf_of(&flags));
     let bytes = fs::read(&conf).with_context(|| format!("read nginx config {}", conf.display()))?;
     let text = std::str::from_utf8(&bytes).context("nginx config is not UTF-8")?;
-    let parsed = crate::nginx_listen::parse_listen_ports(text);
-    let ports = crate::nginx_listen::importable_listen_ports(text);
-    let skipped: Vec<u16> = parsed.into_iter().filter(|p| !ports.contains(p)).collect();
-    reject_frozen(&flags, "import-listens", &binding.tenant, &binding.site, &ports)?;
+    let policy_file = policy_file_of(&flags);
+    let policy = crate::policy::load(&policy_file)?;
+    let extra_skip = if let Some(raw) = flags.get("skip") {
+        crate::ports::parse_port_list_flexible(raw)?.into_iter().collect()
+    } else {
+        crate::nginx_listen::inner_real_ports()
+    };
+    let listens = crate::nginx_listen::parse_listen_ports(text).into_iter().collect();
+    let (ports, skipped_pairs) = crate::nginx_listen::importable_ports(&listens, &policy, &extra_skip);
+    let skipped: Vec<String> = skipped_pairs.iter().map(|(p, r)| format!("{p}={r}")).collect();
+    reject_frozen(&flags, "import-listen", &binding.tenant, &binding.site, &ports)?;
     if flags.bool_flag("dry-run") {
-        println!("import-listens dry-run import={ports:?} skipped={skipped:?}");
+        println!("import-listen dry-run import={ports:?} skipped={skipped:?}");
         return Ok(());
     }
     let ports_file = ports_file_of(&flags);
-    let policy_file = policy_file_of(&flags);
     let mut desired = desired_or_empty(&ports_file, &policy_file)?;
     for port in &ports { desired.insert(*port, binding.clone()); }
-    let policy = crate::policy::load(&policy_file)?;
     crate::policy::validate(&desired, &policy)?;
-    if ports.is_empty() { println!("import-listens: nothing importable; skipped={skipped:?}"); return Ok(()); }
+    if ports.is_empty() { println!("import-listen: nothing importable; skipped={skipped:?}"); return Ok(()); }
     desired::write(&ports_file, &desired)?;
     if let Some(path) = flags.get("central-out") { crate::central::write(Path::new(path), &desired)?; }
-    println!("import-listens imported={ports:?} skipped={skipped:?} desired-only (nginx unchanged)");
+    println!("import-listen imported={ports:?} skipped={skipped:?} desired-only (nginx unchanged)");
     Ok(())
+}
+
+fn ctl_migrate(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["from-nginx", "drop-listen", "apply", "tls", "dry-run", "help"], &["nginx-conf", "from", "tenant", "site", "cert", "policy", "ports-file", "policy-file", "freeze-file", "central-out", "metrics-file", "skip"])?;
+    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    if flags.bool_flag("drop-listen") {
+        if flags.bool_flag("apply") {
+            bail!("migrate --drop-listen --apply is not implemented; conf rewrite is dry-run-only");
+        }
+        return ctl_retire_conf_listen(args);
+    }
+    if flags.bool_flag("from-nginx") || flags.get("from").is_some() {
+        return ctl_import_listens(args);
+    }
+    bail!("migrate needs --from-nginx or --drop-listen");
 }
 
 fn ctl_check_overlap(args: &[String]) -> Result<()> {
@@ -154,40 +187,62 @@ fn ctl_check_overlap(args: &[String]) -> Result<()> {
 }
 
 fn ctl_retire_conf_listen(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["help"], &["nginx-conf"])?;
+    let flags = parse_go_flags(args, &["help", "drop-listen", "from-nginx", "apply", "dry-run", "tls"], &["nginx-conf", "from", "tenant", "site", "cert", "policy", "ports-file", "policy-file", "freeze-file", "central-out", "metrics-file", "skip"])?;
     if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
-    let raw = flags.args.first().ok_or_else(|| anyhow::anyhow!("retire-conf-listen needs PORT"))?;
-    let port: u16 = raw.parse().context("invalid port")?;
     let text = fs::read_to_string(nginx_conf_of(&flags))?;
+    let wanted: BTreeSet<u16> = if flags.args.is_empty() {
+        crate::nginx_listen::importable_listen_ports(&text).into_iter().collect()
+    } else {
+        let mut set = BTreeSet::new();
+        for spec in &flags.args { set.extend(crate::ports::parse_port_list_flexible(spec)?); }
+        set
+    };
     let mut found = false;
     for line in text.lines() {
-        if crate::nginx_listen::parse_listen_ports(line).contains(&port) { println!("{line}"); found = true; }
+        let ports = crate::nginx_listen::parse_listen_ports(line);
+        if ports.iter().any(|p| wanted.contains(p)) { println!("{line}"); found = true; }
     }
-    if !found { println!("no nginx listen line found for port {port}"); }
-    println!("edit nginx manually then reload");
+    if !found { println!("no nginx listen line found for requested ports"); }
+    println!("migrate --drop-listen is dry-run only; edit nginx manually then reload");
     Ok(())
 }
 
 pub(crate) fn status_value(nginx_conf: &Path, ports_file: &Path, policy_file: &Path, pin_dir: &Path, freeze_file: &Path, metrics_file: &Path) -> Result<serde_json::Value> {
+    status_value_with_stamp(nginx_conf, ports_file, policy_file, pin_dir, freeze_file, metrics_file, Path::new(crate::metrics::DEFAULT_APPLY_STAMP))
+}
+
+pub(crate) fn status_value_with_stamp(nginx_conf: &Path, ports_file: &Path, policy_file: &Path, pin_dir: &Path, freeze_file: &Path, metrics_file: &Path, apply_stamp: &Path) -> Result<serde_json::Value> {
     let real = real_ports(nginx_conf)?;
     let desired = desired_or_empty(ports_file, policy_file)?;
     let (map, available) = map_if_available(pin_dir);
     let candidates: BTreeSet<u16> = desired.keys().copied().chain(map.keys().copied()).collect();
     let virtual_ports: Vec<u16> = candidates.difference(&real).copied().collect();
     let overlap_ports: Vec<u16> = candidates.intersection(&real).copied().collect();
+    let plan = desired::plan(&desired, &map);
+    let drift_put = plan.put_primary.len() + plan.put_tls.len();
+    let drift_delete = plan.delete.len();
     Ok(serde_json::json!({
         "real": real.iter().copied().collect::<Vec<_>>(), "virtual": virtual_ports,
         "overlap": overlap_ports, "frozen": freeze_file.exists(), "desired_count": desired.len(),
+        "port_count": desired.len(),
         "map_count": map.len(), "file_map_agree": available && desired.iter().all(|(p,b)| map.get(p) == Some(&b.slot)) && map.len() == desired.len(),
         "virtual_listen_count": candidates.difference(&real).count(), "real_listen_count": real.len(),
-        "overlap_count": candidates.intersection(&real).count(), "apply_fail_total": crate::metrics::read(metrics_file)
+        "overlap_count": candidates.intersection(&real).count(),
+        "conflict_count": candidates.intersection(&real).count(),
+        "drift": {"put": drift_put, "delete": drift_delete},
+        "last_apply_central": crate::metrics::read_apply_stamp(apply_stamp),
+        "apply_fail_total": crate::metrics::read(metrics_file)
     }))
 }
 
+fn apply_stamp_of(flags: &ParsedFlags) -> PathBuf {
+    PathBuf::from(flags.get("apply-stamp").unwrap_or(crate::metrics::DEFAULT_APPLY_STAMP))
+}
+
 fn ctl_status(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["help"], &["nginx-conf", "ports-file", "policy-file", "pin-dir", "freeze-file", "metrics-file"])?;
+    let flags = parse_go_flags(args, &["help"], &["nginx-conf", "ports-file", "policy-file", "pin-dir", "freeze-file", "metrics-file", "apply-stamp"])?;
     if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
-    println!("{}", serde_json::to_string(&status_value(&nginx_conf_of(&flags), &ports_file_of(&flags), &policy_file_of(&flags), &pin_dir_of(&flags), &freeze_file_of(&flags), &metrics_file_of(&flags))?)?);
+    println!("{}", serde_json::to_string(&status_value_with_stamp(&nginx_conf_of(&flags), &ports_file_of(&flags), &policy_file_of(&flags), &pin_dir_of(&flags), &freeze_file_of(&flags), &metrics_file_of(&flags), &apply_stamp_of(&flags))?)?);
     Ok(())
 }
 
@@ -345,27 +400,45 @@ fn ctl_remove(args: &[String]) -> Result<()> {
     )
 }
 
+fn format_listen_row(row: &crate::nginx_listen::ListenRow) -> String {
+    let mut line = format!("{}	kind={}", row.port, row.kind.as_str());
+    if let Some(slot) = row.slot { line.push_str(&format!("	slot={slot}")); }
+    if let Some(tenant) = &row.tenant { line.push_str(&format!("	tenant={tenant}")); }
+    if let Some(site) = &row.site { line.push_str(&format!("	site={site}")); }
+    line
+}
+
 fn ctl_list(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["count", "json", "help"], &["pin-dir", "ports-file", "policy-file", "nginx-conf", "kind"])?;
+    let flags = parse_go_flags(args, &["count", "json", "virtual", "help"], &["pin-dir", "ports-file", "policy-file", "nginx-conf", "kind"])?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
         return Ok(());
     }
-    if flags.get("kind") == Some("virtual") {
+    let table = flags.bool_flag("virtual") || flags.get("kind").is_some();
+    if table {
         let desired = desired_or_empty(&ports_file_of(&flags), &policy_file_of(&flags))?;
         let (map, _) = map_if_available(&pin_dir_of(&flags));
-        let all: BTreeSet<u16> = desired.keys().copied().chain(map.keys().copied()).collect();
         let real = real_ports(&nginx_conf_of(&flags))?;
-        let ports: Vec<u16> = all.difference(&real).copied().collect();
-        if flags.bool_flag("json") { println!("{}", serde_json::json!({"kind":"virtual","ports":ports})); }
-        else if flags.bool_flag("count") { println!("count={}", ports.len()); }
-        else { for port in ports { println!("{port}"); } }
+        let mut rows = crate::nginx_listen::classify(&desired, &map, &real);
+        if let Some(kind) = flags.get("kind") {
+            rows.retain(|r| r.kind.as_str() == kind);
+        }
+        if flags.bool_flag("json") {
+            let ports: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
+                "port": r.port, "kind": r.kind.as_str(), "slot": r.slot, "tenant": r.tenant, "site": r.site
+            })).collect();
+            println!("{}", serde_json::json!({"ports": ports}));
+        } else if flags.bool_flag("count") {
+            println!("count={}", rows.len());
+        } else {
+            for row in rows { println!("{}", format_listen_row(&row)); }
+        }
         return Ok(());
     }
     if flags.bool_flag("json") {
         let map = load_pinned_open_ports(&pin_dir_of(&flags))?;
         let mut ports: Vec<u16> = desired::read_map(&map)?.into_keys().collect(); ports.sort_unstable();
-        println!("{}", serde_json::json!({"kind":flags.get("kind").unwrap_or("all"),"ports":ports})); return Ok(());
+        println!("{}", serde_json::json!({"kind":"all","ports":ports})); return Ok(());
     }
     list_pinned_ports(&pin_dir_of(&flags), flags.bool_flag("count"))
 }
@@ -726,7 +799,7 @@ pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
 }
 
 fn ctl_apply_central(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["quiet", "help"], &["from", "from-central", "pin-dir", "ports-file", "policy-file", "freeze-file", "batch", "nginx-conf", "metrics-file"])?;
+    let flags = parse_go_flags(args, &["quiet", "help"], &["from", "from-central", "pin-dir", "ports-file", "policy-file", "freeze-file", "batch", "nginx-conf", "metrics-file", "apply-stamp"])?;
     if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
     reject_frozen(&flags, "apply-central", "", "", &[])?;
     let source = flags.get("from").or_else(|| flags.get("from-central")).unwrap_or("central/desired-state.json");
@@ -741,7 +814,9 @@ fn ctl_apply_central(args: &[String]) -> Result<()> {
     if flags.bool_flag("quiet") { reconcile.push("-quiet".into()); }
     if let Some(batch) = flags.get("batch") { reconcile.extend(["-batch".into(), batch.into()]); }
     reconcile.extend(["-nginx-conf".into(), nginx_conf_of(&flags).display().to_string(), "-metrics-file".into(), metrics_file_of(&flags).display().to_string()]);
-    ctl_reconcile(&reconcile)
+    ctl_reconcile(&reconcile)?;
+    let _ = crate::metrics::write_apply_stamp(&apply_stamp_of(&flags));
+    Ok(())
 }
 
 fn ctl_close_all(args: &[String]) -> Result<()> {
@@ -901,5 +976,52 @@ mod tests {
         let real = real_ports(&nginx).unwrap();
         let virtuals: Vec<u16> = [8080, 18081].into_iter().filter(|p| !real.contains(p)).collect();
         assert_eq!(virtuals, vec![18081]);
+        assert_eq!(v["port_count"], 1);
+        assert_eq!(v["conflict_count"], 0);
+        assert_eq!(v["drift"]["put"], 1);
+        assert_eq!(v["drift"]["delete"], 0);
+        assert!(v["last_apply_central"].is_null());
+        assert_eq!(v["frozen"], false);
+    }
+
+    #[test]
+    fn list_table_marks_virtual_vs_real() {
+        let desired = DesiredPorts::new();
+        let mut desired = desired;
+        desired.insert(18081, PortBinding { slot: REDIR_PRIMARY as u8, tenant:"acme".into(), site:"www".into(), cert:None, policy:None });
+        let real = [80u16, 8080].into_iter().collect();
+        let rows = crate::nginx_listen::classify(&desired, &HashMap::new(), &real);
+        let kinds: Vec<_> = rows.iter().map(|r| (r.port, r.kind.as_str())).collect();
+        assert!(kinds.contains(&(18081, "virtual")));
+        assert!(kinds.contains(&(80, "real")));
+        assert!(kinds.contains(&(8080, "real")));
+        assert_eq!(format_listen_row(rows.iter().find(|r| r.port == 18081).unwrap()), "18081\tkind=virtual\tslot=0\ttenant=acme\tsite=www");
+    }
+
+    #[test]
+    fn migrate_drop_listen_is_dry_run_only() {
+        let (_dir, _ports, _policy, nginx, _pin, _metrics) = fixture();
+        fs::write(&nginx, "listen 19001;\nlisten 80;\n").unwrap();
+        let before = fs::read(&nginx).unwrap();
+        let args = strings(&["--drop-listen", "-nginx-conf", nginx.to_str().unwrap(), "19001"]);
+        ctl_migrate(&args).unwrap();
+        assert_eq!(fs::read(&nginx).unwrap(), before);
+        let err = ctl_migrate(&strings(&["--drop-listen", "--apply", "-nginx-conf", nginx.to_str().unwrap(), "19001"])).unwrap_err().to_string();
+        assert!(err.contains("dry-run"));
+        assert_eq!(fs::read(&nginx).unwrap(), before);
+    }
+
+    #[test]
+    fn import_listen_alias_and_migrate_from_nginx() {
+        assert!(crate::cli::is_ctl_command("import-listen"));
+        assert!(crate::cli::is_ctl_command("migrate"));
+        let (_dir, ports, policy, nginx, _pin, _metrics) = fixture();
+        fs::write(&nginx, "listen 80;\nlisten 19002;\n").unwrap();
+        let before = fs::read(&nginx).unwrap();
+        ctl_migrate(&strings(&["--from-nginx", "-nginx-conf", nginx.to_str().unwrap(), "-ports-file", ports.to_str().unwrap(), "-policy-file", policy.to_str().unwrap(), "-tenant", "acme", "-site", "www"])).unwrap();
+        let desired = fs::read_to_string(&ports).unwrap();
+        assert!(desired.contains("19002 acme www"));
+        assert!(!desired.lines().any(|l| l.starts_with("80 ")));
+        assert_eq!(fs::read(&nginx).unwrap(), before);
     }
 }

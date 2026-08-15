@@ -2,15 +2,45 @@
 
 The loader treats network ports as two distinct tracks:
 
-- **Real listens** are nginx `listen` sockets. The product's inner ports 80, 443, 8080, and 8443 are always considered real, along with ports read from the nginx configuration.
-- **Virtual listens** are ports steered by `sk_lookup` through the `open_ports` BPF map. Their bindings live in desired state (`ports.conf`).
+- **Real listens** are nginx/OpenResty `listen` sockets. 80 and 443 stay real bind and never enter the `open_ports` map. Product internal listens 8080 and 8443 are treated as real by default.
+- **Virtual listens** are ports steered by `sk_lookup` through the `open_ports` BPF map. Their bindings live in `desired state` (`ports.conf` is this machine's local cache of central/desired state).
 
-Virtual ports are intentionally invisible to `ss -lnt`. Operators should use `waf-sklookup-loader status` or `waf-sklookup-loader list -kind virtual` to inspect them.
+`sk_lookup` virtual ports are **not** visible in `ss -lnt`. Use `waf-sklookup-loader list -virtual` or `waf-sklookup-loader status` / `metrics`. Established connections stay pinned; only a new SYN reselects. Enforcement is `fail-closed`.
 
-`import-listens -tenant T -site S` reads nginx configuration and imports eligible non-standard listen ports into the existing desired-state format. It never writes nginx and does not update the BPF map. Ports 80, 443, 8080, and 8443 are never imported. Policy validation, including the denylist and privileged-port rules, remains fail-closed. `--dry-run` reports imports and skips without writing desired state or the optional version 1 central cache.
+## Import (explicit)
 
-`check-overlap` is a fail-closed safety gate. If a real listen intersects desired state, the current `open_ports` map, or ports being added, the whole mutation is refused before either the desired-state file or map is changed. `add`, `apply-central`, and `reconcile` use this gate.
+`import-listen` (alias `import-listens`, `migrate --from-nginx`) scans nginx/OpenResty conf for non-standard `listen` ports and writes them into `ports.conf` using the E6 format:
 
-`retire-conf-listen PORT` only prints matching nginx `listen` lines and reminds the operator to edit nginx manually and reload. It never edits or reloads nginx.
+```
+PORT TENANT SITE [tls] [cert=ID] [policy=ID]
+```
 
-`status` reports real and virtual ports, overlap, freeze state, desired/map agreement, and small userspace metrics. This adds neither a desired-state schema version nor a BPF map.
+`-tenant` and `-site` are required (or `TENANT` / `SITE` env) so unbound lines are never written. Import does **not** edit nginx/OpenResty conf and does **not** update the BPF map.
+
+80/443 are never imported. Policy denylist ports and privileged 1–1023 (when `allow_privileged` is empty) are skipped. Default `-skip` is 80,443,8080,8443.
+
+When the machine is frozen, import/migrate that would mutate desired state is rejected and audited.
+
+## Conflict detection
+
+A port cannot be both a real nginx listen and in `open_ports` (or in the desired set that would be applied). `add` / `open` / `apply` / `apply-central` / `reconcile` compute `real listen ∩ candidates` and refuse the **whole** operation before any map write: `fail-closed`. No partial map writes.
+
+## Drop listen (separate explicit step)
+
+`migrate --drop-listen` (alias `retire-conf-listen`) is **dry-run only**. It prints the `listen` lines that would be removed. `--apply` is refused; rewrite the conf yourself, then reload. Import never drops listen directives.
+
+## Metrics
+
+`status` / `metrics` prints JSON (no Prometheus):
+
+```json
+{
+  "port_count": 4,
+  "frozen": false,
+  "drift": {"put": 0, "delete": 1},
+  "last_apply_central": null,
+  "conflict_count": 0
+}
+```
+
+`list -virtual` prints a table that marks each port `kind=virtual`, `kind=real`, or `kind=conflict`.

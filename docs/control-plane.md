@@ -23,3 +23,7 @@ The top-level object has `version` (currently `1`) and a `ports` array. Every en
 ## Gray / canary
 
 Gray or canary rollout means running apply on this host and observing it before applying independently on another host. This single-machine contract records no cluster state and makes no claim that any other machine applied.
+
+## Dual-track listen import
+
+E8 adds explicit nginx/OpenResty listen import, a virtual listen table, and userspace metrics. See [dual-track.md](dual-track.md). `ss -lnt` cannot see `sk_lookup` virtual ports; use `list -virtual` or `status`.

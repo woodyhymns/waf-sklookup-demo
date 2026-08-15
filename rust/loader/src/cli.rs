@@ -90,6 +90,8 @@ pub fn is_ctl_command(s: &str) -> bool {
             | "close-all"
             | "rescan-listen"
             | "import-listens"
+            | "import-listen"
+            | "migrate"
             | "check-overlap"
             | "retire-conf-listen"
             | "status"
@@ -373,6 +375,8 @@ mod tests {
             "close-all",
             "rescan-listen",
             "import-listens",
+            "import-listen",
+            "migrate",
             "check-overlap",
             "retire-conf-listen",
             "status",
