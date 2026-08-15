@@ -41,6 +41,10 @@ pub struct Request {
     #[serde(default)] pub start: Option<u16>,
     #[serde(default)] pub skip: Option<String>,
     #[serde(default)] pub full_ladder: bool,
+    #[serde(default)] pub tenant: String,
+    #[serde(default)] pub site: String,
+    #[serde(default)] pub cert: Option<String>,
+    #[serde(default)] pub policy: Option<String>,
 }
 
 pub fn format_ports(ports: &[u16]) -> String {
@@ -52,9 +56,9 @@ pub fn format_ports(ports: &[u16]) -> String {
     }
 }
 
-pub fn audit_line(cred: PeerCred, op: &str, ports: &[u16], ok: bool) -> String {
-    format!("{} audit uid={} gid={} pid={} op={} ports={} ok={}",
-        crate::log_prefix(), cred.uid, cred.gid, cred.pid, op, format_ports(ports), ok)
+pub fn audit_line(cred: PeerCred, op: &str, tenant: &str, site: &str, ports: &[u16], ok: bool) -> String {
+    format!("{} audit uid={} gid={} pid={} op={} tenant={} site={} ports={} ok={}",
+        crate::log_prefix(), cred.uid, cred.gid, cred.pid, op, tenant, site, format_ports(ports), ok)
 }
 
 pub struct Server { path: PathBuf, join: Option<JoinHandle<()>> }
@@ -152,24 +156,28 @@ fn execute(req: &Request, cred: PeerCred, pin_dir: &Path, ports_file: &Path, mut
         ports = crate::ports::generate_fill_ports(req.start.unwrap_or(5000), req.count.unwrap_or(0), &skip)?;
     }
     if let Err(err) = crate::ctl::enforce_ladder(&ports, req.full_ladder) {
-        eprintln!("{}", audit_line(cred, &actual_op, &ports, false));
+        eprintln!("{}", audit_line(cred, &actual_op, &req.tenant, &req.site, &ports, false));
         return Err(err);
     }
     if ports.is_empty() && matches!(actual_op.as_str(), "add" | "open" | "remove" | "close") {
-        eprintln!("{}", audit_line(cred, &actual_op, &ports, false));
+        eprintln!("{}", audit_line(cred, &actual_op, &req.tenant, &req.site, &ports, false));
         bail!("{actual_op} needs at least one port");
     }
     let res = {
         let _guard = mutations.lock().map_err(|_| anyhow::anyhow!("mutation lock poisoned"))?;
         match actual_op.as_str() {
-            "add" | "open" | "fill" => crate::ctl::apply_add(pin_dir, ports_file, &ports,
-                if req.tls { REDIR_TLS as u8 } else { REDIR_PRIMARY as u8 }, DEFAULT_BULK_BATCH, false, true, true),
-            "remove" | "close" => crate::ctl::apply_remove(pin_dir, ports_file, &ports, DEFAULT_BULK_BATCH, false, true, true),
+            "add" | "open" | "fill" => {
+                if req.tenant.is_empty() || req.site.is_empty() { bail!("open/add requires tenant and site (binding is mandatory; see docs/binding.md)"); }
+                let binding = crate::desired::PortBinding { slot: if req.tls { REDIR_TLS as u8 } else { REDIR_PRIMARY as u8 }, tenant: req.tenant.clone(), site: req.site.clone(), cert: req.cert.clone(), policy: req.policy.clone() };
+                crate::ctl::apply_add(pin_dir, ports_file, &crate::policy::default_path(ports_file), &ports,
+                    &binding, DEFAULT_BULK_BATCH, false, true, true)
+            },
+            "remove" | "close" => crate::ctl::apply_remove(pin_dir, ports_file, &crate::policy::default_path(ports_file), &ports, DEFAULT_BULK_BATCH, false, true, true),
             "reconcile" | "apply" => crate::ctl::ctl_reconcile(&["-quiet".into(), "-pin-dir".into(), pin_dir.display().to_string(), "-ports-file".into(), ports_file.display().to_string()]),
             _ => bail!("unknown operation {:?}", req.op),
         }
     };
-    eprintln!("{}", audit_line(cred, &actual_op, &ports, res.is_ok()));
+    eprintln!("{}", audit_line(cred, &actual_op, &req.tenant, &req.site, &ports, res.is_ok()));
     res?;
     Ok(json!({"op":actual_op,"count":ports.len()}))
 }
@@ -180,14 +188,15 @@ pub fn run_client(args: &[String]) -> Result<()> {
     let sock = flags.get("sock").map(str::to_owned).unwrap_or_else(|| std::env::var("CTL_SOCK").unwrap_or_else(|_| DEFAULT_CTL_SOCK.into()));
     if sock.is_empty() { bail!("control socket is disabled (empty path)"); }
     let cmd = &flags.args;
-    let mut req = Request { op: cmd[0].clone(), ports: Vec::new(), tls:false, count_only:false, action:None, count:None, start:None, skip:None, full_ladder:false };
+    let mut req = Request { op: cmd[0].clone(), ports: Vec::new(), tls:false, count_only:false, action:None, count:None, start:None, skip:None, full_ladder:false, tenant:String::new(), site:String::new(), cert:None, policy:None };
     let rest = if req.op == "bulk" { if cmd.len() < 2 { bail!("bulk needs open|close|fill"); } req.action=Some(cmd[1].clone()); &cmd[2..] } else { &cmd[1..] };
     let is_fill = req.action.as_deref() == Some("fill");
     let bools: &[&str] = if is_fill { &["tls","full-ladder"] } else { &["tls","count","count-only","full-ladder"] };
-    let values: &[&str] = if is_fill { &["count","start","skip"] } else { &[] };
+    let values: &[&str] = if is_fill { &["count","start","skip","tenant","site","cert","policy"] } else { &["tenant","site","cert","policy"] };
     let pf = crate::cli::parse_go_flags(rest, bools, values)?;
     req.tls=pf.bool_flag("tls"); req.count_only=pf.bool_flag("count") || pf.bool_flag("count-only"); req.full_ladder=pf.bool_flag("full-ladder");
     req.count=pf.get("count").map(str::parse).transpose()?; req.start=pf.get("start").map(str::parse).transpose()?; req.skip=pf.get("skip").map(str::to_owned);
+    req.tenant=pf.get("tenant").unwrap_or("").to_owned(); req.site=pf.get("site").unwrap_or("").to_owned(); req.cert=pf.get("cert").map(str::to_owned); req.policy=pf.get("policy").map(str::to_owned);
     for spec in &pf.args { req.ports.extend(crate::ports::parse_port_list_flexible(spec)?); }
     let mut stream = UnixStream::connect(&sock).with_context(|| format!("connect control socket {sock}"))?;
     writeln!(stream, "{}", serde_json::to_string(&req)?)?;
@@ -198,7 +207,7 @@ pub fn run_client(args: &[String]) -> Result<()> {
 #[cfg(test)] mod tests {
     use super::*;
     #[test] fn auth_matrix() { assert!(authorize(PeerCred{pid:1,uid:10,gid:30},10,20,0o140660).is_ok()); assert!(authorize(PeerCred{pid:1,uid:30,gid:20},10,20,0o140660).is_ok()); assert!(authorize(PeerCred{pid:1,uid:30,gid:40},10,20,0o140660).is_err()); assert!(authorize(PeerCred{pid:1,uid:0,gid:99},10,20,0o140660).is_ok()); assert!(authorize(PeerCred{pid:1,uid:10,gid:20},10,20,0o140666).unwrap_err().to_string().contains("too open")); }
-    #[test] fn parses_json() { let r:Request=serde_json::from_str(r#"{"op":"add","ports":[80,443],"tls":true}"#).unwrap(); assert_eq!(r.ports, vec![80,443]); assert!(r.tls); }
+    #[test] fn parses_json() { let r:Request=serde_json::from_str(r#"{"op":"add","ports":[8080,8443],"tls":true,"tenant":"acme","site":"www"}"#).unwrap(); assert_eq!(r.ports, vec![8080,8443]); assert!(r.tls); assert_eq!(r.tenant,"acme"); }
     #[test] fn ladder_rejects_10001() { assert!(crate::ctl::enforce_ladder(&vec![1;10_001], false).is_err()); }
-    #[test] fn audit_has_identity_and_ports() { let s=audit_line(PeerCred{pid:123,uid:7,gid:8},"add",&[18083],true); assert!(s.contains("audit uid=7 gid=8 pid=123 op=add ports=18083 ok=true")); }
+    #[test] fn audit_has_identity_and_ports() { let s=audit_line(PeerCred{pid:123,uid:7,gid:8},"add","acme","www",&[18083],true); assert!(s.contains("audit uid=7 gid=8 pid=123 op=add tenant=acme site=www ports=18083 ok=true")); }
 }

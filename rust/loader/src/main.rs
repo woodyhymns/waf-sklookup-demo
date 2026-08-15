@@ -9,6 +9,7 @@ mod listen_fd;
 mod load;
 mod openresty;
 mod pin;
+mod policy;
 mod ports;
 mod sockctl;
 mod toy;
@@ -101,7 +102,12 @@ fn run_map_edit(args: LongRunningArgs) -> Result<()> {
             if http_ports.is_empty() && tls_ports.is_empty() {
                 bail!("open-port needs -ports and/or -tls-ports");
             }
-            ctl::open_pinned_ports(&args.pin_dir, &args.ports_file, &http_ports, &tls_ports)
+            if args.tenant.is_empty() || args.site.is_empty() {
+                bail!("open-port requires -tenant and -site (binding is mandatory; see docs/binding.md)");
+            }
+            let binding = desired::PortBinding { slot: pin::REDIR_PRIMARY as u8, tenant: args.tenant.clone(), site: args.site.clone(), cert: args.cert.clone(), policy: args.policy.clone() };
+            let policy_file = args.policy_file.clone().unwrap_or_else(|| policy::default_path(&args.ports_file));
+            ctl::open_pinned_ports(&args.pin_dir, &args.ports_file, &http_ports, &tls_ports, &binding, &policy_file)
         }
         RunMode::DumpPorts => ctl::dump_pinned_ports(&args.pin_dir),
         RunMode::Toy | RunMode::OpenResty => {
@@ -150,21 +156,28 @@ fn acquire_loader_lock() -> Result<std::fs::File> {
 
 fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs) -> Result<()> {
     let _pin_lock = acquire_loader_lock()?;
-    let (mut bpf, _link) = load::load_and_attach(open_object, args.bpf_impl)?;
-
+    let policy_file = args.policy_file.clone().unwrap_or_else(|| policy::default_path(&args.ports_file));
     let desired = if args.ports_file.exists() {
-        let state = desired::load(&args.ports_file)?;
+        let state = desired::load_with_policy(&args.ports_file, &policy_file)?;
         log_msg(format_args!(
             "loaded desired ports from {}",
             args.ports_file.display()
         ));
         state
     } else {
+        if args.tenant.is_empty() || args.site.is_empty() {
+            bail!("missing desired file cannot be seeded without -tenant and -site (binding is mandatory; see docs/binding.md)");
+        }
         let steered = ports::parse_port_list_allow_empty(&args.ports_raw)
             .map_err(|e| anyhow::anyhow!("bad -ports: {e:#}"))?;
         let tls = ports::parse_port_list_allow_empty(&args.tls_ports_raw)
             .map_err(|e| anyhow::anyhow!("bad -tls-ports: {e:#}"))?;
-        let state = desired::from_lists(&steered, &tls)?;
+        let mut state = desired::from_lists(&steered, &tls, &args.tenant, &args.site)?;
+        for binding in state.values_mut() {
+            binding.cert.clone_from(&args.cert);
+            binding.policy.clone_from(&args.policy);
+        }
+        policy::validate(&state, &policy::load(&policy_file)?)?;
         desired::write(&args.ports_file, &state)?;
         log_msg(format_args!(
             "seeded missing desired ports file {} from -ports/-tls-ports",
@@ -172,13 +185,14 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         ));
         state
     };
+    let (mut bpf, _link) = load::load_and_attach(open_object, args.bpf_impl)?;
     let steered: Vec<u16> = desired
         .iter()
-        .filter_map(|(p, s)| (*s == pin::REDIR_PRIMARY as u8).then_some(*p))
+        .filter_map(|(p, b)| (b.slot == pin::REDIR_PRIMARY as u8).then_some(*p))
         .collect();
     let tls_ports: Vec<u16> = desired
         .iter()
-        .filter_map(|(p, s)| (*s == pin::REDIR_TLS as u8).then_some(*p))
+        .filter_map(|(p, b)| (b.slot == pin::REDIR_TLS as u8).then_some(*p))
         .collect();
 
     let pin_fatal = matches!(args.mode, RunMode::OpenResty);
@@ -268,7 +282,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
     while !shutdown.load(Ordering::SeqCst) {
         if reload.swap(false, Ordering::SeqCst) {
             let _guard = mutations.lock().map_err(|_| anyhow::anyhow!("mutation lock poisoned"))?;
-            match desired::load(&args.ports_file)
+            match desired::load_with_policy(&args.ports_file, &policy_file)
                 .and_then(|state| bpf.with_open_ports(|map| desired::reconcile_map(map, &state)))
             {
                 Ok(plan) => log_msg(format_args!(
