@@ -9,6 +9,8 @@ mod desired;
 mod freeze;
 mod listen_fd;
 mod load;
+mod metrics;
+mod nginx_listen;
 mod openresty;
 mod pin;
 mod policy;

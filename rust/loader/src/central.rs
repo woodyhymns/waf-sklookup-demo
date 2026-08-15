@@ -4,19 +4,19 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::desired::{self, DesiredPorts, PortBinding};
 use crate::pin::{OPEN_PORTS_MAX_ENTRIES, REDIR_PRIMARY, REDIR_TLS};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CentralState {
     version: u32,
     ports: Vec<CentralPort>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CentralPort {
     tenant: String,
@@ -64,6 +64,15 @@ pub fn apply_cache(central_path: &Path, ports_file: &Path, policy_file: &Path) -
     crate::policy::validate(&desired, &policy)?;
     desired::write(ports_file, &desired)?;
     Ok(desired)
+}
+
+pub fn write(path: &Path, desired: &DesiredPorts) -> Result<()> {
+    let state = CentralState { version: 1, ports: desired.iter().map(|(port, b)| CentralPort {
+        tenant: b.tenant.clone(), site: b.site.clone(), port: *port, cert: b.cert.clone(),
+        policy: b.policy.clone(), tls: b.slot == REDIR_TLS as u8,
+    }).collect() };
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) { fs::create_dir_all(parent)?; }
+    fs::write(path, serde_json::to_vec_pretty(&state)?).with_context(|| format!("write central desired state {}", path.display()))
 }
 
 #[cfg(test)]

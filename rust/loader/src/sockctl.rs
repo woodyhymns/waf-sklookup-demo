@@ -45,6 +45,7 @@ pub struct Request {
     #[serde(default)] pub site: String,
     #[serde(default)] pub cert: Option<String>,
     #[serde(default)] pub policy: Option<String>,
+    #[serde(default)] pub kind: Option<String>,
 }
 
 pub fn format_ports(ports: &[u16]) -> String {
@@ -143,9 +144,19 @@ fn handle(mut stream: UnixStream, path: &Path, pin_dir: &Path, ports_file: &Path
 
 fn execute(req: &Request, cred: PeerCred, pin_dir: &Path, ports_file: &Path, mutations: &Mutex<()>) -> Result<Value> {
     let op = req.op.to_ascii_lowercase();
+    if op == "status" || op == "metrics" {
+        return crate::ctl::status_value(Path::new("openresty/nginx.conf"), ports_file, &crate::policy::default_path(ports_file), pin_dir, Path::new(crate::freeze::DEFAULT_FREEZE_FILE), Path::new(crate::metrics::DEFAULT_METRICS_FILE));
+    }
     if matches!(op.as_str(), "list" | "dump") {
         let map = load_pinned_open_ports(pin_dir)?;
         let mut ports: Vec<_> = crate::desired::read_map(&map)?.into_iter().collect();
+        if req.kind.as_deref() == Some("virtual") {
+            let real = if let Ok(text) = fs::read_to_string("openresty/nginx.conf") { crate::nginx_listen::real_listen_ports(&text) } else { crate::nginx_listen::inner_real_ports() };
+            if let Ok(wanted) = crate::desired::load_with_policy(ports_file, &crate::policy::default_path(ports_file)) {
+                for (port, binding) in wanted { if !ports.iter().any(|(p, _)| *p == port) { ports.push((port, binding.slot)); } }
+            }
+            ports.retain(|(p, _)| !real.contains(p));
+        }
         ports.sort_unstable();
         return if req.count_only { Ok(json!({"count":ports.len()})) } else { Ok(json!({"ports":ports})) };
     }
@@ -182,7 +193,7 @@ fn execute(req: &Request, cred: PeerCred, pin_dir: &Path, ports_file: &Path, mut
                 if req.tenant.is_empty() || req.site.is_empty() { bail!("open/add requires tenant and site (binding is mandatory; see docs/binding.md)"); }
                 let binding = crate::desired::PortBinding { slot: if req.tls { REDIR_TLS as u8 } else { REDIR_PRIMARY as u8 }, tenant: req.tenant.clone(), site: req.site.clone(), cert: req.cert.clone(), policy: req.policy.clone() };
                 crate::ctl::apply_add(pin_dir, ports_file, &crate::policy::default_path(ports_file), &ports,
-                    &binding, DEFAULT_BULK_BATCH, false, true, true)
+                    &binding, DEFAULT_BULK_BATCH, false, true, true, Path::new("openresty/nginx.conf"), Path::new(crate::metrics::DEFAULT_METRICS_FILE))
             },
             "remove" | "close" => crate::ctl::apply_remove(pin_dir, ports_file, &crate::policy::default_path(ports_file), &ports, DEFAULT_BULK_BATCH, false, true, true),
             "reconcile" | "apply" => crate::ctl::ctl_reconcile(&["-quiet".into(), "-pin-dir".into(), pin_dir.display().to_string(), "-ports-file".into(), ports_file.display().to_string()]),
@@ -196,19 +207,20 @@ fn execute(req: &Request, cred: PeerCred, pin_dir: &Path, ports_file: &Path, mut
 
 pub fn run_client(args: &[String]) -> Result<()> {
     let flags = crate::cli::parse_go_flags(args, &[], &["sock"])?;
-    if flags.args.is_empty() { bail!("ctl needs list|add|remove|reconcile|bulk"); }
+    if flags.args.is_empty() { bail!("ctl needs list|status|add|remove|reconcile|bulk"); }
     let sock = flags.get("sock").map(str::to_owned).unwrap_or_else(|| std::env::var("CTL_SOCK").unwrap_or_else(|_| DEFAULT_CTL_SOCK.into()));
     if sock.is_empty() { bail!("control socket is disabled (empty path)"); }
     let cmd = &flags.args;
-    let mut req = Request { op: cmd[0].clone(), ports: Vec::new(), tls:false, count_only:false, action:None, count:None, start:None, skip:None, full_ladder:false, tenant:String::new(), site:String::new(), cert:None, policy:None };
+    let mut req = Request { op: cmd[0].clone(), ports: Vec::new(), tls:false, count_only:false, action:None, count:None, start:None, skip:None, full_ladder:false, tenant:String::new(), site:String::new(), cert:None, policy:None, kind:None };
     let rest = if req.op == "bulk" { if cmd.len() < 2 { bail!("bulk needs open|close|fill"); } req.action=Some(cmd[1].clone()); &cmd[2..] } else { &cmd[1..] };
     let is_fill = req.action.as_deref() == Some("fill");
     let bools: &[&str] = if is_fill { &["tls","full-ladder"] } else { &["tls","count","count-only","full-ladder"] };
-    let values: &[&str] = if is_fill { &["count","start","skip","tenant","site","cert","policy"] } else { &["tenant","site","cert","policy"] };
+    let values: &[&str] = if is_fill { &["count","start","skip","tenant","site","cert","policy"] } else { &["tenant","site","cert","policy","kind"] };
     let pf = crate::cli::parse_go_flags(rest, bools, values)?;
     req.tls=pf.bool_flag("tls"); req.count_only=pf.bool_flag("count") || pf.bool_flag("count-only"); req.full_ladder=pf.bool_flag("full-ladder");
     req.count=pf.get("count").map(str::parse).transpose()?; req.start=pf.get("start").map(str::parse).transpose()?; req.skip=pf.get("skip").map(str::to_owned);
     req.tenant=pf.get("tenant").unwrap_or("").to_owned(); req.site=pf.get("site").unwrap_or("").to_owned(); req.cert=pf.get("cert").map(str::to_owned); req.policy=pf.get("policy").map(str::to_owned);
+    req.kind=pf.get("kind").map(str::to_owned);
     for spec in &pf.args { req.ports.extend(crate::ports::parse_port_list_flexible(spec)?); }
     let mut stream = UnixStream::connect(&sock).with_context(|| format!("connect control socket {sock}"))?;
     writeln!(stream, "{}", serde_json::to_string(&req)?)?;
