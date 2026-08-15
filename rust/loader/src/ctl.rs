@@ -27,7 +27,12 @@ Root CLI escape hatch (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-loader bulk open -range START-END -tenant TENANT -site SITE
   sudo ./waf-sklookup-loader bulk close -range START-END    # 30K/60K close
   sudo ./waf-sklookup-loader bulk fill -count N [-start 5000] -tenant TENANT -site SITE
+  sudo ./waf-sklookup-loader fill -count N [-start 5000] -tenant TENANT -site SITE
   sudo ./waf-sklookup-loader reconcile|apply [-ports-file ports.conf] [-policy-file policy.conf]
+  sudo ./waf-sklookup-loader apply-central [-from central/desired-state.json] [-ports-file ports.conf]
+  sudo ./waf-sklookup-loader freeze [--close-all] [-freeze-file /run/waf-sklookup/frozen]
+  sudo ./waf-sklookup-loader unfreeze [-freeze-file /run/waf-sklookup/frozen]
+  sudo ./waf-sklookup-loader close-all [-pin-dir DIR]
   sudo ./waf-sklookup-loader rescan-listen [-target 127.0.0.1:8080] [-tls-target ADDR]
 
 Mutating commands update the desired file (default ports.conf) and the pinned map.
@@ -40,7 +45,7 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
     if args.is_empty() {
         bail!("{}", CTL_USAGE.trim());
     }
-    let mutation = matches!(args[0].as_str(), "add"|"open"|"remove"|"close"|"load-ports"|"close-ports"|"bulk"|"reconcile"|"apply");
+    let mutation = matches!(args[0].as_str(), "add"|"open"|"remove"|"close"|"load-ports"|"close-ports"|"bulk"|"fill"|"reconcile"|"apply"|"apply-central"|"freeze"|"unfreeze"|"close-all");
     let result = match args[0].as_str() {
         "add" | "open" => ctl_add(&args[1..]),
         "remove" | "close" => ctl_remove(&args[1..]),
@@ -48,7 +53,14 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
         "load-ports" => ctl_bulk_add(&args[1..]),
         "close-ports" => ctl_bulk_remove(&args[1..]),
         "bulk" => ctl_bulk(&args[1..]),
-        "reconcile" | "apply" => ctl_reconcile(&args[1..]),
+        "fill" => ctl_bulk_fill(&args[1..]),
+        "reconcile" => ctl_reconcile(&args[1..]),
+        "apply" if flag_value(args, "from-central").is_some() => ctl_apply_central(&args[1..]),
+        "apply" => ctl_reconcile(&args[1..]),
+        "apply-central" => ctl_apply_central(&args[1..]),
+        "freeze" => ctl_freeze(&args[1..]),
+        "unfreeze" => ctl_unfreeze(&args[1..]),
+        "close-all" => ctl_close_all(&args[1..]),
         "rescan-listen" => ctl_rescan_listen(&args[1..]),
         "help" => {
             eprint!("{CTL_USAGE}");
@@ -69,7 +81,7 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
 
 fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     for (i, arg) in args.iter().enumerate() {
-        if let Some(v) = arg.strip_prefix(&format!("-{name}=")) { return Some(v); }
+        if let Some(v) = arg.strip_prefix(&format!("--{name}=")).or_else(|| arg.strip_prefix(&format!("-{name}="))) { return Some(v); }
         if arg == &format!("-{name}") || arg == &format!("--{name}") { return args.get(i + 1).map(String::as_str); }
     }
     None
@@ -122,6 +134,14 @@ fn policy_file_of(flags: &ParsedFlags) -> PathBuf {
     flags.get("policy-file").map(PathBuf::from).unwrap_or_else(|| crate::policy::default_path(&ports_file_of(flags)))
 }
 
+fn freeze_file_of(flags: &ParsedFlags) -> PathBuf {
+    PathBuf::from(flags.get("freeze-file").unwrap_or(crate::freeze::DEFAULT_FREEZE_FILE))
+}
+
+fn reject_frozen(flags: &ParsedFlags, op: &str, tenant: &str, site: &str, ports: &[u16]) -> Result<()> {
+    crate::freeze::reject_if_frozen(&freeze_file_of(flags), op, tenant, site, ports)
+}
+
 fn binding_from_flags(flags: &ParsedFlags) -> Result<PortBinding> {
     let tenant = flags.get("tenant").unwrap_or("");
     let site = flags.get("site").unwrap_or("");
@@ -139,7 +159,7 @@ fn ctl_add(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["tls", "stdin", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "policy-file", "range", "file", "tenant", "site", "cert", "policy"],
+        &["pin-dir", "ports-file", "policy-file", "freeze-file", "range", "file", "tenant", "site", "cert", "policy"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -160,6 +180,7 @@ fn ctl_add(args: &[String]) -> Result<()> {
     };
     enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
     let binding = binding_from_flags(&flags)?;
+    reject_frozen(&flags, "add/open", &binding.tenant, &binding.site, &ports)?;
     apply_add(
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
@@ -234,7 +255,7 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["tls", "stdin", "quiet", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "policy-file", "range", "file", "batch", "tenant", "site", "cert", "policy"],
+        &["pin-dir", "ports-file", "policy-file", "freeze-file", "range", "file", "batch", "tenant", "site", "cert", "policy"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -244,6 +265,7 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
     enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
     let batch = parse_batch(flags.get("batch"))?;
     let binding = binding_from_flags(&flags)?;
+    reject_frozen(&flags, "bulk open/add", &binding.tenant, &binding.site, &ports)?;
     apply_add(
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
@@ -261,13 +283,14 @@ fn ctl_bulk_remove(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["stdin", "quiet", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "policy-file", "range", "file", "batch"],
+        &["pin-dir", "ports-file", "policy-file", "freeze-file", "range", "file", "batch"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
         return Ok(());
     }
     let ports = collect_from_flags(&flags)?;
+    reject_frozen(&flags, "bulk close/remove", "", "", &ports)?;
     enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
     let batch = parse_batch(flags.get("batch"))?;
     apply_remove(
@@ -286,7 +309,7 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["tls", "quiet", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "policy-file", "count", "start", "skip", "batch", "tenant", "site", "cert", "policy"],
+        &["pin-dir", "ports-file", "policy-file", "freeze-file", "count", "start", "skip", "batch", "tenant", "site", "cert", "policy"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -316,6 +339,7 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
         pin.display()
     );
     let binding = binding_from_flags(&flags)?;
+    reject_frozen(&flags, "bulk fill", &binding.tenant, &binding.site, &ports)?;
     apply_add(
         &pin,
         &ports_file_of(&flags),
@@ -501,11 +525,12 @@ fn desired_or_empty(path: &Path, policy_file: &Path) -> Result<DesiredPorts> {
 }
 
 pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["quiet", "help"], &["pin-dir", "ports-file", "policy-file", "batch"])?;
+    let flags = parse_go_flags(args, &["quiet", "help"], &["pin-dir", "ports-file", "policy-file", "freeze-file", "batch"])?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
         return Ok(());
     }
+    reject_frozen(&flags, "reconcile/apply", "", "", &[])?;
     let desired = desired::load_with_policy(&ports_file_of(&flags), &policy_file_of(&flags))?;
     let map = load_pinned_open_ports(&pin_dir_of(&flags))?;
     let plan = desired::plan(&desired, &desired::read_map(&map)?);
@@ -548,6 +573,58 @@ pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn ctl_apply_central(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["quiet", "help"], &["from", "from-central", "pin-dir", "ports-file", "policy-file", "freeze-file", "batch"])?;
+    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    reject_frozen(&flags, "apply-central", "", "", &[])?;
+    let source = flags.get("from").or_else(|| flags.get("from-central")).unwrap_or("central/desired-state.json");
+    crate::central::apply_cache(Path::new(source), &ports_file_of(&flags), &policy_file_of(&flags))?;
+    let mut reconcile = vec!["-pin-dir".into(), pin_dir_of(&flags).display().to_string(), "-ports-file".into(), ports_file_of(&flags).display().to_string(), "-policy-file".into(), policy_file_of(&flags).display().to_string(), "-freeze-file".into(), freeze_file_of(&flags).display().to_string()];
+    if flags.bool_flag("quiet") { reconcile.push("-quiet".into()); }
+    if let Some(batch) = flags.get("batch") { reconcile.extend(["-batch".into(), batch.into()]); }
+    ctl_reconcile(&reconcile)
+}
+
+fn ctl_close_all(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["quiet", "help"], &["pin-dir", "batch"])?;
+    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    let map = load_pinned_open_ports(&pin_dir_of(&flags))?;
+    let mut ports: Vec<u16> = desired::read_map(&map)?.into_keys().collect();
+    ports.sort_unstable();
+    let batch = parse_batch(flags.get("batch"))?;
+    let mut stderr = io::stderr();
+    let result = bulk_delete_ports(&map, &ports, batch, if flags.bool_flag("quiet") { None } else { Some(&mut stderr) })?;
+    println!("close-all removed={} (ports.conf unchanged)", result.n);
+    Ok(())
+}
+
+fn ctl_freeze(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["close-all", "help", "quiet"], &["freeze-file", "pin-dir", "batch"])?;
+    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    let path = freeze_file_of(&flags);
+    crate::freeze::set_frozen(&path)?;
+    println!("machine frozen state={}", path.display());
+    if flags.bool_flag("close-all") {
+        let mut close = vec!["-pin-dir".into(), pin_dir_of(&flags).display().to_string()];
+        if flags.bool_flag("quiet") { close.push("-quiet".into()); }
+        if let Some(batch) = flags.get("batch") { close.extend(["-batch".into(), batch.into()]); }
+        let result = ctl_close_all(&close);
+        let cred = crate::sockctl::PeerCred { pid: std::process::id() as i32, uid: unsafe { libc::getuid() }, gid: unsafe { libc::getgid() } };
+        eprintln!("{}", crate::sockctl::audit_line(cred, "close-all", "", "", &[], result.is_ok()));
+        result?;
+    }
+    Ok(())
+}
+
+fn ctl_unfreeze(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["help"], &["freeze-file"])?;
+    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    let path = freeze_file_of(&flags);
+    crate::freeze::clear_frozen(&path)?;
+    println!("machine unfrozen state={} (ports unchanged)", path.display());
+    Ok(())
+}
+
 pub fn dump_pinned_ports(pin_dir: &Path) -> Result<()> {
     list_pinned_ports(pin_dir, false)
 }
@@ -572,5 +649,12 @@ mod tests {
         let binding = binding_from_flags(&flags).unwrap();
         assert_eq!(binding.tenant, "acme");
         assert_eq!(binding.site, "www");
+    }
+
+    #[test]
+    fn emergency_commands_parse() {
+        assert!(parse_go_flags(&["--close-all".into(), "-freeze-file".into(), "/tmp/f".into()], &["close-all"], &["freeze-file"]).unwrap().bool_flag("close-all"));
+        assert!(crate::cli::is_ctl_command("close-all"));
+        assert!(crate::cli::is_ctl_command("apply-central"));
     }
 }

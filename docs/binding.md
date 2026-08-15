@@ -32,7 +32,7 @@ Example:
 ```text
 # deny additional ports; the five default-denied ports remain denied
 deny=22,25,53,3306,6379
-allow_privileged=80,443
+allow_privileged=
 max_ports_per_tenant=32
 max_ports_per_machine=128
 ```

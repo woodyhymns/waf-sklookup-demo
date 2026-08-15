@@ -155,6 +155,18 @@ fn execute(req: &Request, cred: PeerCred, pin_dir: &Path, ports_file: &Path, mut
         let skip = crate::ports::parse_skip_set(req.skip.as_deref().unwrap_or("8080,8443"))?;
         ports = crate::ports::generate_fill_ports(req.start.unwrap_or(5000), req.count.unwrap_or(0), &skip)?;
     }
+    if matches!(actual_op.as_str(), "add" | "open" | "fill" | "apply" | "reconcile" | "apply-central") || op == "bulk" {
+        if let Err(err) = crate::freeze::reject_if_frozen(
+            Path::new(crate::freeze::DEFAULT_FREEZE_FILE),
+            if op == "bulk" { "bulk" } else { &actual_op },
+            &req.tenant,
+            &req.site,
+            &ports,
+        ) {
+            eprintln!("{}", audit_line(cred, &actual_op, &req.tenant, &req.site, &ports, false));
+            return Err(err);
+        }
+    }
     if let Err(err) = crate::ctl::enforce_ladder(&ports, req.full_ladder) {
         eprintln!("{}", audit_line(cred, &actual_op, &req.tenant, &req.site, &ports, false));
         return Err(err);

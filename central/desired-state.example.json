@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "ports": [
+    {"tenant": "demo", "site": "local", "port": 18081},
+    {"tenant": "demo", "site": "local", "port": 18082},
+    {"tenant": "demo", "site": "local", "port": 65500},
+    {"tenant": "demo", "site": "local", "port": 18443, "tls": true}
+  ]
+}

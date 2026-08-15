@@ -79,10 +79,15 @@ pub fn is_ctl_command(s: &str) -> bool {
             | "list"
             | "dump"
             | "bulk"
+            | "fill"
             | "load-ports"
             | "close-ports"
             | "reconcile"
             | "apply"
+            | "apply-central"
+            | "freeze"
+            | "unfreeze"
+            | "close-all"
             | "rescan-listen"
             | "help"
     )
@@ -348,6 +353,7 @@ mod tests {
             "remove",
             "list",
             "bulk",
+            "fill",
             "load-ports",
             "close-ports",
             "open",
@@ -356,6 +362,10 @@ mod tests {
             "help",
             "reconcile",
             "apply",
+            "apply-central",
+            "freeze",
+            "unfreeze",
+            "close-all",
             "rescan-listen",
         ] {
             assert!(is_ctl_command(c), "{c} should be a ctl command");
