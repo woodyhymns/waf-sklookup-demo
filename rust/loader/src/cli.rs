@@ -89,6 +89,11 @@ pub fn is_ctl_command(s: &str) -> bool {
             | "unfreeze"
             | "close-all"
             | "rescan-listen"
+            | "import-listens"
+            | "check-overlap"
+            | "retire-conf-listen"
+            | "status"
+            | "metrics"
             | "help"
     )
 }
@@ -367,6 +372,11 @@ mod tests {
             "unfreeze",
             "close-all",
             "rescan-listen",
+            "import-listens",
+            "check-overlap",
+            "retire-conf-listen",
+            "status",
+            "metrics",
         ] {
             assert!(is_ctl_command(c), "{c} should be a ctl command");
         }
