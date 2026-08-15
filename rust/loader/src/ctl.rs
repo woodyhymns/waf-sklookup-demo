@@ -39,7 +39,7 @@ Root CLI escape hatch (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-loader migrate --from-nginx -tenant TENANT -site SITE [-nginx-conf PATH]
   sudo ./waf-sklookup-loader migrate --drop-listen [PORT] [-nginx-conf PATH]   # dry-run only
   sudo ./waf-sklookup-loader check-overlap [-nginx-conf PATH] [-ports-file ports.conf]
-  sudo ./waf-sklookup-loader retire-conf-listen PORT [-nginx-conf PATH]
+  sudo ./waf-sklookup-loader retire-conf-listen PORT [-nginx-conf PATH]   # dry-run only; --apply refused
   sudo ./waf-sklookup-loader list -virtual [-nginx-conf PATH] [-ports-file ports.conf]
   sudo ./waf-sklookup-loader status|metrics [-nginx-conf PATH] [-ports-file ports.conf]
 
@@ -189,6 +189,9 @@ fn ctl_check_overlap(args: &[String]) -> Result<()> {
 fn ctl_retire_conf_listen(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(args, &["help", "drop-listen", "from-nginx", "apply", "dry-run", "tls"], &["nginx-conf", "from", "tenant", "site", "cert", "policy", "ports-file", "policy-file", "freeze-file", "central-out", "metrics-file", "skip"])?;
     if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    if flags.bool_flag("apply") {
+        bail!("retire-conf-listen --apply is not implemented; conf rewrite is dry-run-only");
+    }
     let text = fs::read_to_string(nginx_conf_of(&flags))?;
     let wanted: BTreeSet<u16> = if flags.args.is_empty() {
         crate::nginx_listen::importable_listen_ports(&text).into_iter().collect()
@@ -1007,6 +1010,18 @@ mod tests {
         ctl_migrate(&args).unwrap();
         assert_eq!(fs::read(&nginx).unwrap(), before);
         let err = ctl_migrate(&strings(&["--drop-listen", "--apply", "-nginx-conf", nginx.to_str().unwrap(), "19001"])).unwrap_err().to_string();
+        assert!(err.contains("dry-run"));
+        assert_eq!(fs::read(&nginx).unwrap(), before);
+    }
+
+    #[test]
+    fn retire_conf_listen_apply_is_hard_reject() {
+        let (_dir, _ports, _policy, nginx, _pin, _metrics) = fixture();
+        fs::write(&nginx, "listen 19001;\nlisten 80;\n").unwrap();
+        let before = fs::read(&nginx).unwrap();
+        ctl_retire_conf_listen(&strings(&["-nginx-conf", nginx.to_str().unwrap(), "19001"])).unwrap();
+        assert_eq!(fs::read(&nginx).unwrap(), before);
+        let err = ctl_retire_conf_listen(&strings(&["--apply", "-nginx-conf", nginx.to_str().unwrap(), "19001"])).unwrap_err().to_string();
         assert!(err.contains("dry-run"));
         assert_eq!(fs::read(&nginx).unwrap(), before);
     }
