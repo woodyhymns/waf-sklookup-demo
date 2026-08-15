@@ -60,6 +60,11 @@ pub struct LongRunningArgs {
     pub wait: Duration,
     pub pin_dir: PathBuf,
     pub ports_file: PathBuf,
+    pub policy_file: Option<PathBuf>,
+    pub tenant: String,
+    pub site: String,
+    pub cert: Option<String>,
+    pub policy: Option<String>,
     pub ctl_sock: Option<PathBuf>,
     pub ctl_group: Option<u32>,
 }
@@ -199,6 +204,11 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
             "wait",
             "pin-dir",
             "ports-file",
+            "policy-file",
+            "tenant",
+            "site",
+            "cert",
+            "policy",
             "ctl-sock",
             "ctl-group",
             "bpf",
@@ -239,6 +249,11 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
         wait: parse_duration(wait_raw).with_context(|| format!("bad -wait {wait_raw:?}"))?,
         pin_dir: PathBuf::from(flags.get("pin-dir").unwrap_or(crate::pin::DEFAULT_PIN_DIR)),
         ports_file: PathBuf::from(flags.get("ports-file").unwrap_or("ports.conf")),
+        policy_file: flags.get("policy-file").map(PathBuf::from),
+        tenant: flags.get("tenant").unwrap_or("").to_string(),
+        site: flags.get("site").unwrap_or("").to_string(),
+        cert: flags.get("cert").map(str::to_owned),
+        policy: flags.get("policy").map(str::to_owned),
         ctl_sock: (!flags.bool_flag("no-ctl") && !ctl_raw.is_empty()).then(|| PathBuf::from(ctl_raw)),
         ctl_group,
     })
@@ -311,6 +326,9 @@ pub fn print_long_running_usage() {
            -wait duration\n        openresty mode: max time to wait for target listen (default 60s)\n\
            -pin-dir string\n        bpffs directory for pinned maps (default \"/sys/fs/bpf/waf-sklookup\")\n\
            -ports-file string\n        desired open_ports file (default \"ports.conf\")\n\
+           -policy-file string\n        binding/deny/quota policy (default policy.conf next to ports file)\n\
+           -tenant string, -site string\n        mandatory binding when seeding or opening ports (see docs/binding.md)\n\
+           -cert string, -policy string\n        optional stored binding identifiers\n\
            -ctl-sock string\n        authenticated Unix control socket (default \"/run/waf-sklookup/ctl.sock\"; empty disables)\n\
            -ctl-group uint\n        optional numeric group owner for the control socket\n\
            -no-ctl\n        disable the Unix control socket\n\n",

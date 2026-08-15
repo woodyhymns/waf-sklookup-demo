@@ -19,6 +19,8 @@ PIN_DIR="${PIN_DIR:-/sys/fs/bpf/waf-sklookup}"
 # Default: do not send X-Waf-External-Port. Set to 1 for acceptance/debug.
 WAF_EXPOSE_EXTERNAL_PORT="${WAF_EXPOSE_EXTERNAL_PORT:-}"
 LOADER_BIN="${LOADER_BIN:-./rust/loader/target/release/waf-sklookup-loader}"
+TENANT="${TENANT:-demo}"
+SITE="${SITE:-local}"
 
 usage() {
   cat <<EOF
@@ -168,6 +170,8 @@ start_loader() {
     -target "$TARGET" \
     -ports "$LOADER_PORTS" \
     -ports-file "$PORTS_FILE" \
+    -tenant "$TENANT" \
+    -site "$SITE" \
     "${bpf_args[@]}" \
     "${tls_args[@]}" \
     -wait "$WAIT" \
@@ -469,7 +473,7 @@ ensure_loader_bin() {
 
 cmd_add() {
   ensure_loader_bin
-  sudo "$LOADER_BIN" add -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" "$@"
+  sudo "$LOADER_BIN" add -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" -tenant "$TENANT" -site "$SITE" "$@"
 }
 
 cmd_remove() {
@@ -490,7 +494,11 @@ cmd_bulk() {
   fi
   shift
   ensure_loader_bin
-  sudo "$LOADER_BIN" bulk "$sub" -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" "$@"
+  local binding_args=()
+  if [[ "$sub" == "open" || "$sub" == "add" || "$sub" == "fill" ]]; then
+    binding_args=(-tenant "$TENANT" -site "$SITE")
+  fi
+  sudo "$LOADER_BIN" bulk "$sub" -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" "${binding_args[@]}" "$@"
 }
 
 cmd_fill() {
@@ -508,7 +516,7 @@ cmd_fill() {
   fi
   ensure_loader_bin
   # Test helper: overlay the live map; do not rewrite the desired-state file.
-  sudo "$LOADER_BIN" bulk fill -count "$count" -start "$start" -pin-dir "$PIN_DIR" -no-file
+  sudo "$LOADER_BIN" bulk fill -count "$count" -start "$start" -pin-dir "$PIN_DIR" -tenant "$TENANT" -site "$SITE" -no-file
 }
 
 cmd_reconcile() {

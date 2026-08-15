@@ -11,7 +11,7 @@ use crate::bulk::{
     load_pinned_open_ports,
 };
 use crate::cli::{parse_go_flags, ParsedFlags};
-use crate::desired::{self, DesiredPorts};
+use crate::desired::{self, DesiredPorts, PortBinding};
 use crate::pin::{self, DEFAULT_BULK_BATCH, DEFAULT_PIN_DIR, REDIR_PRIMARY, REDIR_TLS};
 use crate::ports::{self, collect_bulk_ports, generate_fill_ports, parse_skip_set};
 
@@ -19,15 +19,15 @@ pub const CTL_USAGE: &str = "\
 Product control plane is the Unix socket (`ctl` / /run/waf-sklookup/ctl.sock).
 Root CLI escape hatch (pinned open_ports; no OpenResty reload):
 
-  sudo ./waf-sklookup-loader add|open PORT|START-END [-range A-B] [-file F] [-stdin]
+  sudo ./waf-sklookup-loader add|open PORT|START-END -tenant TENANT -site SITE [-cert ID] [-policy ID]
   sudo ./waf-sklookup-loader remove|close PORT|START-END [-range A-B] [-file F] [-stdin]
   sudo ./waf-sklookup-loader list [-count]
-  sudo ./waf-sklookup-loader load-ports -range START-END | -file ports.txt | -stdin
+  sudo ./waf-sklookup-loader load-ports -range START-END | -file ports.txt | -stdin -tenant TENANT -site SITE
   sudo ./waf-sklookup-loader close-ports -range START-END | -file ports.txt | -stdin
-  sudo ./waf-sklookup-loader bulk open  -range START-END    # 30K/60K open
+  sudo ./waf-sklookup-loader bulk open -range START-END -tenant TENANT -site SITE
   sudo ./waf-sklookup-loader bulk close -range START-END    # 30K/60K close
-  sudo ./waf-sklookup-loader bulk fill -count 30000 [-start 5000]
-  sudo ./waf-sklookup-loader reconcile|apply [-ports-file ports.conf]
+  sudo ./waf-sklookup-loader bulk fill -count N [-start 5000] -tenant TENANT -site SITE
+  sudo ./waf-sklookup-loader reconcile|apply [-ports-file ports.conf] [-policy-file policy.conf]
   sudo ./waf-sklookup-loader rescan-listen [-target 127.0.0.1:8080] [-tls-target ADDR]
 
 Mutating commands update the desired file (default ports.conf) and the pinned map.
@@ -59,10 +59,20 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
     if mutation {
         let cred = crate::sockctl::PeerCred { pid: std::process::id() as i32, uid: unsafe { libc::getuid() }, gid: unsafe { libc::getgid() } };
         let detail = if args.len() > 1 { args[1..].join(",") } else { "none".into() };
-        eprintln!("{} audit uid={} gid={} pid={} op={} ports={} ok={}", crate::log_prefix(),
-            cred.uid, cred.gid, cred.pid, args[0], detail, result.is_ok());
+        let tenant = flag_value(args, "tenant").unwrap_or("");
+        let site = flag_value(args, "site").unwrap_or("");
+        eprintln!("{} audit uid={} gid={} pid={} op={} tenant={} site={} ports={} ok={}", crate::log_prefix(),
+            cred.uid, cred.gid, cred.pid, args[0], tenant, site, detail, result.is_ok());
     }
     result
+}
+
+fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    for (i, arg) in args.iter().enumerate() {
+        if let Some(v) = arg.strip_prefix(&format!("-{name}=")) { return Some(v); }
+        if arg == &format!("-{name}") || arg == &format!("--{name}") { return args.get(i + 1).map(String::as_str); }
+    }
+    None
 }
 
 fn ctl_rescan_listen(args: &[String]) -> Result<()> {
@@ -108,6 +118,19 @@ fn ports_file_of(flags: &ParsedFlags) -> PathBuf {
     PathBuf::from(flags.get("ports-file").unwrap_or("ports.conf"))
 }
 
+fn policy_file_of(flags: &ParsedFlags) -> PathBuf {
+    flags.get("policy-file").map(PathBuf::from).unwrap_or_else(|| crate::policy::default_path(&ports_file_of(flags)))
+}
+
+fn binding_from_flags(flags: &ParsedFlags) -> Result<PortBinding> {
+    let tenant = flags.get("tenant").unwrap_or("");
+    let site = flags.get("site").unwrap_or("");
+    if tenant.is_empty() || site.is_empty() {
+        bail!("open/add requires -tenant and -site (binding is mandatory; see docs/binding.md)");
+    }
+    Ok(PortBinding { slot: ctl_slot(flags.bool_flag("tls")), tenant: tenant.into(), site: site.into(), cert: flags.get("cert").map(str::to_owned), policy: flags.get("policy").map(str::to_owned) })
+}
+
 fn maybe_help(flags: &ParsedFlags) -> bool {
     flags.bool_flag("help")
 }
@@ -116,7 +139,7 @@ fn ctl_add(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["tls", "stdin", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "range", "file"],
+        &["pin-dir", "ports-file", "policy-file", "range", "file", "tenant", "site", "cert", "policy"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -136,11 +159,13 @@ fn ctl_add(args: &[String]) -> Result<()> {
         }
     };
     enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
+    let binding = binding_from_flags(&flags)?;
     apply_add(
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
+        &policy_file_of(&flags),
         &ports,
-        ctl_slot(flags.bool_flag("tls")),
+        &binding,
         DEFAULT_BULK_BATCH,
         true,
         ports.len() > 32,
@@ -152,7 +177,7 @@ fn ctl_remove(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["stdin", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "range", "file"],
+        &["pin-dir", "ports-file", "policy-file", "range", "file"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -175,6 +200,7 @@ fn ctl_remove(args: &[String]) -> Result<()> {
     apply_remove(
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
+        &policy_file_of(&flags),
         &ports,
         DEFAULT_BULK_BATCH,
         true,
@@ -208,7 +234,7 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["tls", "stdin", "quiet", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "range", "file", "batch"],
+        &["pin-dir", "ports-file", "policy-file", "range", "file", "batch", "tenant", "site", "cert", "policy"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -217,11 +243,13 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
     let ports = collect_from_flags(&flags)?;
     enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
     let batch = parse_batch(flags.get("batch"))?;
+    let binding = binding_from_flags(&flags)?;
     apply_add(
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
+        &policy_file_of(&flags),
         &ports,
-        ctl_slot(flags.bool_flag("tls")),
+        &binding,
         batch,
         !flags.bool_flag("quiet"),
         true,
@@ -233,7 +261,7 @@ fn ctl_bulk_remove(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["stdin", "quiet", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "range", "file", "batch"],
+        &["pin-dir", "ports-file", "policy-file", "range", "file", "batch"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -245,6 +273,7 @@ fn ctl_bulk_remove(args: &[String]) -> Result<()> {
     apply_remove(
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
+        &policy_file_of(&flags),
         &ports,
         batch,
         !flags.bool_flag("quiet"),
@@ -257,7 +286,7 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["tls", "quiet", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "count", "start", "skip", "batch"],
+        &["pin-dir", "ports-file", "policy-file", "count", "start", "skip", "batch", "tenant", "site", "cert", "policy"],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -286,11 +315,13 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
         "M3 fill: count={count} start={start} skip={skip_raw:?} pin={} (no OpenResty reload)\n",
         pin.display()
     );
+    let binding = binding_from_flags(&flags)?;
     apply_add(
         &pin,
         &ports_file_of(&flags),
+        &policy_file_of(&flags),
         &ports,
-        ctl_slot(flags.bool_flag("tls")),
+        &binding,
         batch,
         !flags.bool_flag("quiet"),
         true,
@@ -317,35 +348,36 @@ fn collect_from_flags(flags: &ParsedFlags) -> Result<Vec<u16>> {
 pub(crate) fn apply_add(
     pin_dir: &Path,
     ports_file: &Path,
+    policy_file: &Path,
     ports: &[u16],
-    slot: u8,
+    binding: &PortBinding,
     batch: usize,
     progress: bool,
     summary: bool,
     sync_file: bool,
 ) -> Result<()> {
     let m = load_pinned_open_ports(pin_dir)?;
+    let mut desired = desired_or_empty(ports_file, policy_file)?;
+    for port in ports { desired.insert(*port, binding.clone()); }
+    let policy = crate::policy::load(policy_file)?;
+    crate::policy::validate(&desired, &policy)?;
     if sync_file {
-        let mut desired = desired_or_current(ports_file, &m)?;
-        for port in ports {
-            desired.insert(*port, slot);
-        }
         desired::write(ports_file, &desired)?;
     }
     let mut stderr = io::stderr();
     let mut prog: Option<&mut dyn Write> = if progress { Some(&mut stderr) } else { None };
-    let res = bulk_put_ports(&m, ports, slot, batch, prog.as_deref_mut())?;
+    let res = bulk_put_ports(&m, ports, binding.slot, batch, prog.as_deref_mut())?;
     if summary {
-        println!("{}", format_bulk_summary("added", res.n, slot, &res));
+        println!("{}", format_bulk_summary("added", res.n, binding.slot, &res));
         return Ok(());
     }
-    let label = if slot == REDIR_TLS as u8 {
+    let label = if binding.slot == REDIR_TLS as u8 {
         " (stock TLS fallback)"
     } else {
         ""
     };
     for p in ports {
-        println!("opened steered port {p} → redir_socket[{slot}]{label}");
+        println!("opened steered port {p} → redir_socket[{}]{label}", binding.slot);
     }
     Ok(())
 }
@@ -353,6 +385,7 @@ pub(crate) fn apply_add(
 pub(crate) fn apply_remove(
     pin_dir: &Path,
     ports_file: &Path,
+    policy_file: &Path,
     ports: &[u16],
     batch: usize,
     progress: bool,
@@ -361,7 +394,7 @@ pub(crate) fn apply_remove(
 ) -> Result<()> {
     let m = load_pinned_open_ports(pin_dir)?;
     if sync_file {
-        let mut desired = desired_or_current(ports_file, &m)?;
+        let mut desired = desired::load_with_policy(ports_file, policy_file)?;
         for port in ports {
             desired.remove(port);
         }
@@ -421,7 +454,7 @@ fn port_from_key(key: &[u8]) -> u16 {
 }
 
 pub fn close_pinned_ports(pin_dir: &Path, ports_file: &Path, ports: &[u16]) -> Result<()> {
-    apply_remove(pin_dir, ports_file, ports, DEFAULT_BULK_BATCH, false, false, true)
+    apply_remove(pin_dir, ports_file, &crate::policy::default_path(ports_file), ports, DEFAULT_BULK_BATCH, false, false, true)
 }
 
 pub fn open_pinned_ports(
@@ -429,6 +462,8 @@ pub fn open_pinned_ports(
     ports_file: &Path,
     http_ports: &[u16],
     tls_ports: &[u16],
+    binding: &PortBinding,
+    policy_file: &Path,
 ) -> Result<()> {
     let overlap = ports::port_set_overlap(http_ports, tls_ports);
     if !overlap.is_empty() {
@@ -438,8 +473,8 @@ pub fn open_pinned_ports(
         apply_add(
             pin_dir,
             ports_file,
-            http_ports,
-            REDIR_PRIMARY as u8,
+            policy_file, http_ports,
+            &PortBinding { slot: REDIR_PRIMARY as u8, ..binding.clone() },
             DEFAULT_BULK_BATCH,
             false,
             false,
@@ -450,8 +485,8 @@ pub fn open_pinned_ports(
         apply_add(
             pin_dir,
             ports_file,
-            tls_ports,
-            REDIR_TLS as u8,
+            policy_file, tls_ports,
+            &PortBinding { slot: REDIR_TLS as u8, ..binding.clone() },
             DEFAULT_BULK_BATCH,
             false,
             false,
@@ -461,21 +496,17 @@ pub fn open_pinned_ports(
     Ok(())
 }
 
-fn desired_or_current(path: &Path, map: &impl MapCore) -> Result<DesiredPorts> {
-    if path.exists() {
-        desired::load(path)
-    } else {
-        Ok(desired::read_map(map)?.into_iter().collect())
-    }
+fn desired_or_empty(path: &Path, policy_file: &Path) -> Result<DesiredPorts> {
+    if path.exists() { desired::load_with_policy(path, policy_file) } else { Ok(DesiredPorts::new()) }
 }
 
 pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["quiet", "help"], &["pin-dir", "ports-file", "batch"])?;
+    let flags = parse_go_flags(args, &["quiet", "help"], &["pin-dir", "ports-file", "policy-file", "batch"])?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
         return Ok(());
     }
-    let desired = desired::load(&ports_file_of(&flags))?;
+    let desired = desired::load_with_policy(&ports_file_of(&flags), &policy_file_of(&flags))?;
     let map = load_pinned_open_ports(&pin_dir_of(&flags))?;
     let plan = desired::plan(&desired, &desired::read_map(&map)?);
     let batch = parse_batch(flags.get("batch"))?;
@@ -524,4 +555,22 @@ pub fn dump_pinned_ports(pin_dir: &Path) -> Result<()> {
 #[allow(dead_code)]
 pub fn pin_max() -> u32 {
     pin::OPEN_PORTS_MAX_ENTRIES
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_binding_flags_are_mandatory() {
+        let empty = parse_go_flags(&[], &["tls"], &["tenant", "site", "cert", "policy"]).unwrap();
+        let err = binding_from_flags(&empty).unwrap_err().to_string();
+        assert!(err.contains("-tenant and -site"));
+
+        let args = vec!["-tenant=acme".into(), "-site".into(), "www".into()];
+        let flags = parse_go_flags(&args, &["tls"], &["tenant", "site", "cert", "policy"]).unwrap();
+        let binding = binding_from_flags(&flags).unwrap();
+        assert_eq!(binding.tenant, "acme");
+        assert_eq!(binding.site, "www");
+    }
 }

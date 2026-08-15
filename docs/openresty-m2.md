@@ -17,12 +17,12 @@ make build
 LOADER=./rust/loader/target/release/waf-sklookup-loader
 # product control plane (Unix socket)
 "$LOADER" ctl list
-"$LOADER" ctl add 18083
+"$LOADER" ctl add 18083 -tenant acme -site www
 "$LOADER" ctl remove 18083
 "$LOADER" ctl reconcile
 
 # root CLI escape hatch (pinned maps)
-sudo "$LOADER" add 18083
+sudo "$LOADER" add 18083 -tenant acme -site www
 sudo "$LOADER" remove 18083
 sudo "$LOADER" list
 sudo "$LOADER" list -count
@@ -48,3 +48,7 @@ Aliases are `open`=`add`, `close`=`remove`, `dump`=`list`, `load-ports`=`bulk op
 The helper closes its fill range on exit. Dedicated-host 30K/60K runs require `M3_FULL_LADDER=1`; do not run them on shared machines. The default fill start is 5000, and internal listens 8080/8443 are skipped.
 
 `LOADER_BIN` remains overridable in the demo and acceptance scripts. See [acceptance-m3-rust.md](acceptance-m3-rust.md) for the current acceptance recipe.
+
+## Binding policy
+
+Opening a port now requires a tenant and site binding, and the loader enforces local deny, privileged-port, and quota policy on every mutation and reconcile surface. See [binding.md](binding.md) for the desired-state format, CLI flags, defaults, and migration instructions.
