@@ -139,6 +139,15 @@ mod tests {
     }
 
     #[test]
+    fn repository_policy_does_not_allow_real_listen_ports() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join("policy.conf");
+        let policy = load(&path).unwrap();
+        assert!(!policy.allow_privileged.contains(&80));
+        assert!(!policy.allow_privileged.contains(&443));
+        assert!(validate_binding(80, &binding("acme"), &policy).is_err());
+    }
+
+    #[test]
     fn tenant_quota_accepts_32_rejects_33() {
         let p = Policy::default();
         let mut d = DesiredPorts::new();

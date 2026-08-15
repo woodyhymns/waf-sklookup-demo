@@ -2,9 +2,11 @@
 //! This is the default loader and can be selected via `LOADER_BIN`.
 
 mod bulk;
+mod central;
 mod cli;
 mod ctl;
 mod desired;
+mod freeze;
 mod listen_fd;
 mod load;
 mod openresty;
