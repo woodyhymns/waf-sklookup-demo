@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use libbpf_rs::{ErrorKind, MapCore, MapFlags, MapHandle};
 
+use crate::key::{PortKey, PortVal, PORT_KEY_SIZE, PORT_VAL_SIZE};
 use crate::pin::{open_ports_path, DEFAULT_BULK_BATCH, REDIR_TLS};
 
 #[derive(Debug, Clone, Default)]
@@ -18,6 +19,11 @@ pub struct BulkResult {
 }
 
 pub fn load_pinned_open_ports(pin_dir: &Path) -> Result<MapHandle> {
+    // This check happens before returning a writable map handle, so every
+    // second-process path (ctl, socket control plane, bulk fill/close) refuses
+    // to mutate a map owned by a different BPF program. A missing sidecar is
+    // tolerated for a one-time upgrade from older deployments.
+    let _ = crate::identity::assert_pinned_program_matches(pin_dir)?;
     let path = open_ports_path(pin_dir);
     MapHandle::from_pinned_path(&path).with_context(|| {
         format!(
@@ -27,41 +33,37 @@ pub fn load_pinned_open_ports(pin_dir: &Path) -> Result<MapHandle> {
     })
 }
 
-fn port_key_bytes(map: &impl MapCore, port: u16) -> Vec<u8> {
-    let mut key = vec![0u8; map.key_size() as usize];
-    let b = port.to_ne_bytes();
-    let n = key.len().min(b.len());
-    key[..n].copy_from_slice(&b[..n]);
-    key
-}
-
-fn slot_value_bytes(map: &impl MapCore, slot: u8) -> Vec<u8> {
-    let mut val = vec![0u8; map.value_size() as usize];
-    if !val.is_empty() {
-        val[0] = slot;
+/// Verify the pinned map really uses the layout this binary was built for.
+///
+/// The previous code silently truncated or zero-padded keys to whatever
+/// `key_size()` reported. Against a map from a different build that produces
+/// well-formed writes to the *wrong* keys, which is far worse than refusing:
+/// ports would appear to open while the dataplane steered nothing.
+fn check_layout(map: &impl MapCore) -> Result<()> {
+    let (k, v) = (map.key_size() as usize, map.value_size() as usize);
+    if k != PORT_KEY_SIZE || v != PORT_VAL_SIZE {
+        anyhow::bail!(
+            "pinned open_ports layout is key={k} value={v}, expected key={PORT_KEY_SIZE} \
+             value={PORT_VAL_SIZE}; the running dataplane was built from different \
+             sources (re-pin after restarting the loader)"
+        );
     }
-    val
+    Ok(())
 }
 
-fn pack_keys(map: &impl MapCore, ports: &[u16]) -> Vec<u8> {
-    let sz = map.key_size() as usize;
-    let mut out = vec![0u8; sz * ports.len()];
-    for (i, p) in ports.iter().enumerate() {
-        let b = p.to_ne_bytes();
-        let n = sz.min(b.len());
-        out[i * sz..i * sz + n].copy_from_slice(&b[..n]);
+fn pack_keys(keys: &[PortKey]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(PORT_KEY_SIZE * keys.len());
+    for k in keys {
+        out.extend_from_slice(&k.to_bytes());
     }
     out
 }
 
-fn pack_slot_values(map: &impl MapCore, n: usize, slot: u8) -> Vec<u8> {
-    let sz = map.value_size() as usize;
-    let mut out = vec![0u8; sz * n];
-    if sz == 0 {
-        return out;
-    }
-    for i in 0..n {
-        out[i * sz] = slot;
+fn pack_values(n: usize, group: u8, shards: u8) -> Vec<u8> {
+    let val = PortVal::new(group, shards).to_bytes();
+    let mut out = Vec::with_capacity(PORT_VAL_SIZE * n);
+    for _ in 0..n {
+        out.extend_from_slice(&val);
     }
     out
 }
@@ -70,10 +72,13 @@ fn is_missing_key(err: &libbpf_rs::Error) -> bool {
     err.kind() == ErrorKind::NotFound
 }
 
-pub fn bulk_put_ports(
+/// Batched put. `shards` is the live worker count for `group`; see
+/// `openresty::max_shards`.
+pub fn bulk_put_keys(
     map: &MapHandle,
-    ports: &[u16],
+    ports: &[PortKey],
     slot: u8,
+    shards: u8,
     batch_size: usize,
     mut progress: Option<&mut dyn Write>,
 ) -> Result<BulkResult> {
@@ -81,6 +86,8 @@ pub fn bulk_put_ports(
     if ports.is_empty() {
         return Ok(res);
     }
+    check_layout(map)?;
+    let shards = shards.max(1);
     let batch_size = if batch_size == 0 {
         DEFAULT_BULK_BATCH
     } else {
@@ -94,8 +101,8 @@ pub fn bulk_put_ports(
         let end = (i + batch_size).min(ports.len());
         let chunk = &ports[i..end];
         if use_batch {
-            let keys = pack_keys(map, chunk);
-            let vals = pack_slot_values(map, chunk.len(), slot);
+            let keys = pack_keys(chunk);
+            let vals = pack_values(chunk.len(), slot, shards);
             match map.update_batch(
                 &keys,
                 &vals,
@@ -124,10 +131,12 @@ pub fn bulk_put_ports(
             }
         } else {
             for p in chunk {
-                let key = port_key_bytes(map, *p);
-                let val = slot_value_bytes(map, slot);
-                map.update(&key, &val, MapFlags::ANY)
-                    .with_context(|| format!("put port {p}"))?;
+                map.update(
+                    &p.to_bytes(),
+                    &PortVal::new(slot, shards).to_bytes(),
+                    MapFlags::ANY,
+                )
+                .with_context(|| format!("put {p}"))?;
                 done += 1;
             }
         }
@@ -141,9 +150,9 @@ pub fn bulk_put_ports(
     Ok(res)
 }
 
-pub fn bulk_delete_ports(
+pub fn bulk_delete_keys(
     map: &MapHandle,
-    ports: &[u16],
+    ports: &[PortKey],
     batch_size: usize,
     mut progress: Option<&mut dyn Write>,
 ) -> Result<BulkResult> {
@@ -151,6 +160,7 @@ pub fn bulk_delete_ports(
     if ports.is_empty() {
         return Ok(res);
     }
+    check_layout(map)?;
     let batch_size = if batch_size == 0 {
         DEFAULT_BULK_BATCH
     } else {
@@ -162,7 +172,7 @@ pub fn bulk_delete_ports(
     while i < ports.len() {
         let end = (i + batch_size).min(ports.len());
         let chunk = &ports[i..end];
-        let keys = pack_keys(map, chunk);
+        let keys = pack_keys(chunk);
         match map.delete_batch(&keys, chunk.len() as u32, MapFlags::ANY, MapFlags::ANY) {
             Ok(()) => {
                 done += chunk.len();
@@ -170,8 +180,7 @@ pub fn bulk_delete_ports(
             }
             Err(_) => {
                 for p in chunk {
-                    let key = port_key_bytes(map, *p);
-                    match map.delete(&key) {
+                    match map.delete(&p.to_bytes()) {
                         Ok(()) => done += 1,
                         Err(err) if is_missing_key(&err) => {
                             res.missing += 1;
@@ -180,7 +189,7 @@ pub fn bulk_delete_ports(
                         Err(err) => {
                             res.n = done;
                             res.elapsed = start.elapsed();
-                            return Err(err).with_context(|| format!("delete port {p}"));
+                            return Err(err).with_context(|| format!("delete {p}"));
                         }
                     }
                 }
@@ -285,6 +294,29 @@ pub fn fmt_duration(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_keys_are_exact_stride_not_truncated() {
+        // The old helper padded/truncated to key_size(); a stride mismatch here
+        // writes valid entries under the wrong keys.
+        let keys = [PortKey::wildcard_v4(18081), PortKey::wildcard_v4(18082)];
+        let packed = pack_keys(&keys);
+        assert_eq!(packed.len(), PORT_KEY_SIZE * 2);
+        assert_eq!(
+            PortKey::from_bytes(&packed[PORT_KEY_SIZE..]).unwrap(),
+            keys[1]
+        );
+    }
+
+    #[test]
+    fn packed_values_carry_group_and_shards() {
+        let packed = pack_values(3, 1, 4);
+        assert_eq!(packed.len(), PORT_VAL_SIZE * 3);
+        for i in 0..3 {
+            let v = PortVal::from_bytes(&packed[i * PORT_VAL_SIZE..]);
+            assert_eq!((v.group, v.shards), (1, 4));
+        }
+    }
 
     #[test]
     fn format_bulk_summary_ok() {

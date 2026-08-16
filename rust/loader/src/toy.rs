@@ -25,7 +25,8 @@ pub fn run_toy_mode(
         TcpListener::bind(listen_addr).with_context(|| format!("listen {listen_addr}"))?;
     let held = listen_fd::dup_fd(&listener)?;
     register_listen_fd(redir_socket, held.as_raw_fd(), REDIR_PRIMARY)?;
-    open_steered_ports(open_ports, steered_ports, REDIR_PRIMARY as u8)?;
+    // Toy mode has exactly one listen socket, hence a single shard.
+    open_steered_ports(open_ports, steered_ports, REDIR_PRIMARY as u8, 1)?;
 
     let listen_owned = listen_addr.to_string();
     let stop = Arc::clone(shutdown);

@@ -2,17 +2,21 @@
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::{collections::{BTreeSet, HashMap}, fs};
+use std::{
+    collections::{BTreeSet, HashMap},
+    fs,
+};
 
 use anyhow::{bail, Context, Result};
 use libbpf_rs::{MapCore, MapFlags, MapHandle};
 
 use crate::bulk::{
-    bulk_delete_ports, bulk_put_ports, format_bulk_summary, format_remove_summary,
+    bulk_delete_keys, bulk_put_keys, format_bulk_summary, format_remove_summary,
     load_pinned_open_ports,
 };
 use crate::cli::{parse_go_flags, ParsedFlags};
-use crate::desired::{self, DesiredPorts, PortBinding};
+use crate::desired::{self, CurrentPorts, DesiredPorts, PortBinding};
+use crate::key::{Dest, PortKey};
 use crate::pin::{self, DEFAULT_BULK_BATCH, DEFAULT_PIN_DIR, REDIR_PRIMARY, REDIR_TLS};
 use crate::ports::{self, collect_bulk_ports, generate_fill_ports, parse_skip_set};
 
@@ -53,7 +57,26 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
     if args.is_empty() {
         bail!("{}", CTL_USAGE.trim());
     }
-    let mutation = matches!(args[0].as_str(), "add"|"open"|"remove"|"close"|"load-ports"|"close-ports"|"bulk"|"fill"|"reconcile"|"apply"|"apply-central"|"freeze"|"unfreeze"|"close-all"|"import-listens"|"import-listen"|"migrate");
+    let mutation = matches!(
+        args[0].as_str(),
+        "add"
+            | "open"
+            | "remove"
+            | "close"
+            | "load-ports"
+            | "close-ports"
+            | "bulk"
+            | "fill"
+            | "reconcile"
+            | "apply"
+            | "apply-central"
+            | "freeze"
+            | "unfreeze"
+            | "close-all"
+            | "import-listens"
+            | "import-listen"
+            | "migrate"
+    );
     let result = match args[0].as_str() {
         "add" | "open" => ctl_add(&args[1..]),
         "remove" | "close" => ctl_remove(&args[1..]),
@@ -82,20 +105,45 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
         other => bail!("unknown command {other:?}\n{CTL_USAGE}"),
     };
     if mutation {
-        let cred = crate::sockctl::PeerCred { pid: std::process::id() as i32, uid: unsafe { libc::getuid() }, gid: unsafe { libc::getgid() } };
-        let detail = if args.len() > 1 { args[1..].join(",") } else { "none".into() };
+        let cred = crate::sockctl::PeerCred {
+            pid: std::process::id() as i32,
+            uid: unsafe { libc::getuid() },
+            gid: unsafe { libc::getgid() },
+        };
+        let detail = if args.len() > 1 {
+            args[1..].join(",")
+        } else {
+            "none".into()
+        };
         let tenant = flag_value(args, "tenant").unwrap_or("");
         let site = flag_value(args, "site").unwrap_or("");
-        eprintln!("{} audit uid={} gid={} pid={} op={} tenant={} site={} ports={} ok={}", crate::log_prefix(),
-            cred.uid, cred.gid, cred.pid, args[0], tenant, site, detail, result.is_ok());
+        eprintln!(
+            "{} audit uid={} gid={} pid={} op={} tenant={} site={} ports={} ok={}",
+            crate::log_prefix(),
+            cred.uid,
+            cred.gid,
+            cred.pid,
+            args[0],
+            tenant,
+            site,
+            detail,
+            result.is_ok()
+        );
     }
     result
 }
 
 fn flag_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     for (i, arg) in args.iter().enumerate() {
-        if let Some(v) = arg.strip_prefix(&format!("--{name}=")).or_else(|| arg.strip_prefix(&format!("-{name}="))) { return Some(v); }
-        if arg == &format!("-{name}") || arg == &format!("--{name}") { return args.get(i + 1).map(String::as_str); }
+        if let Some(v) = arg
+            .strip_prefix(&format!("--{name}="))
+            .or_else(|| arg.strip_prefix(&format!("-{name}=")))
+        {
+            return Some(v);
+        }
+        if arg == &format!("-{name}") || arg == &format!("--{name}") {
+            return args.get(i + 1).map(String::as_str);
+        }
     }
     None
 }
@@ -109,62 +157,175 @@ fn ctl_rescan_listen(args: &[String]) -> Result<()> {
     let path = pin::redir_socket_path(pin_dir_of(&flags));
     let map = MapHandle::from_pinned_path(&path)
         .with_context(|| format!("open pinned redir_socket {}", path.display()))?;
-    let mut held = Vec::new();
-    crate::openresty::rescan_held(
+
+    // Re-register from scratch: this CLI is a second process and holds none of
+    // the loader's FDs, so there is no prior shard set to diff against.
+    let mut sets = Vec::new();
+    let target = flags.get("target").unwrap_or("127.0.0.1:8080");
+    sets.push(crate::openresty::register_shards(
         &map,
-        flags.get("target").unwrap_or("127.0.0.1:8080"),
-        flags.get("tls-target").filter(|v| !v.is_empty()),
-        &mut held,
-    )?;
-    println!("rescan-listen: refreshed live listen fd(s); open_ports unchanged");
+        target,
+        REDIR_PRIMARY,
+    )?);
+    if let Some(tls) = flags.get("tls-target").filter(|v| !v.is_empty()) {
+        sets.push(crate::openresty::register_shards(&map, tls, REDIR_TLS)?);
+    }
+
+    // The shard count in open_ports must follow the listen set we just wrote,
+    // otherwise the dataplane can pick a shard index with no socket behind it.
+    let shards = crate::openresty::max_shards(&sets);
+    let open_ports = load_pinned_open_ports(&pin_dir_of(&flags))?;
+    let retargeted = desired::retarget_shards(&open_ports, shards)?;
+    println!(
+        "rescan-listen: refreshed {} group(s) shards={shards} retargeted={retargeted} entries",
+        sets.len()
+    );
+
+    // Dropping `sets` closes the dup'd FDs. The sockmap keeps its own reference
+    // to each socket, so the entries stay valid after this process exits.
     Ok(())
 }
 
 fn import_binding(flags: &ParsedFlags) -> Result<PortBinding> {
-    let tenant = flags.get("tenant").map(str::to_owned).or_else(|| std::env::var("TENANT").ok()).unwrap_or_default();
-    let site = flags.get("site").map(str::to_owned).or_else(|| std::env::var("SITE").ok()).unwrap_or_default();
+    let tenant = flags
+        .get("tenant")
+        .map(str::to_owned)
+        .or_else(|| std::env::var("TENANT").ok())
+        .unwrap_or_default();
+    let site = flags
+        .get("site")
+        .map(str::to_owned)
+        .or_else(|| std::env::var("SITE").ok())
+        .unwrap_or_default();
     if tenant.is_empty() || site.is_empty() {
         bail!("import-listen requires -tenant and -site (or TENANT/SITE env); unbound lines are never written");
     }
-    Ok(PortBinding { slot: ctl_slot(flags.bool_flag("tls")), tenant, site, cert: flags.get("cert").map(str::to_owned), policy: flags.get("policy").map(str::to_owned) })
+    Ok(PortBinding {
+        slot: ctl_slot(flags.bool_flag("tls")),
+        tenant,
+        site,
+        cert: flags.get("cert").map(str::to_owned),
+        policy: flags.get("policy").map(str::to_owned),
+        dest: dest_of(flags)?,
+    })
+}
+
+/// `-addr` selects the destination VIP; omitted means the IPv4 wildcard, which
+/// is what every pre-existing invocation meant.
+fn dest_of(flags: &ParsedFlags) -> Result<Dest> {
+    match flags.get("addr").filter(|v| !v.is_empty()) {
+        Some(raw) => Dest::parse(raw),
+        None => Ok(Dest::AnyV4),
+    }
 }
 
 fn ctl_import_listens(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["tls", "dry-run", "from-nginx", "help"], &["nginx-conf", "from", "tenant", "site", "cert", "policy", "ports-file", "policy-file", "freeze-file", "central-out", "metrics-file", "skip"])?;
-    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    let flags = parse_go_flags(
+        args,
+        &["tls", "dry-run", "from-nginx", "help"],
+        &[
+            "nginx-conf",
+            "from",
+            "tenant",
+            "site",
+            "cert",
+            "policy",
+            "ports-file",
+            "policy-file",
+            "freeze-file",
+            "central-out",
+            "metrics-file",
+            "skip",
+        ],
+    )?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
     let binding = import_binding(&flags)?;
-    let conf = flags.get("from").map(PathBuf::from).unwrap_or_else(|| nginx_conf_of(&flags));
+    let conf = flags
+        .get("from")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| nginx_conf_of(&flags));
     let bytes = fs::read(&conf).with_context(|| format!("read nginx config {}", conf.display()))?;
     let text = std::str::from_utf8(&bytes).context("nginx config is not UTF-8")?;
     let policy_file = policy_file_of(&flags);
     let policy = crate::policy::load(&policy_file)?;
     let extra_skip = if let Some(raw) = flags.get("skip") {
-        crate::ports::parse_port_list_flexible(raw)?.into_iter().collect()
+        crate::ports::parse_port_list_flexible(raw)?
+            .into_iter()
+            .collect()
     } else {
         crate::nginx_listen::inner_real_ports()
     };
-    let listens = crate::nginx_listen::parse_listen_ports(text).into_iter().collect();
-    let (ports, skipped_pairs) = crate::nginx_listen::importable_ports(&listens, &policy, &extra_skip);
-    let skipped: Vec<String> = skipped_pairs.iter().map(|(p, r)| format!("{p}={r}")).collect();
-    reject_frozen(&flags, "import-listen", &binding.tenant, &binding.site, &ports)?;
+    let listens = crate::nginx_listen::parse_listen_ports(text)
+        .into_iter()
+        .collect();
+    let (ports, skipped_pairs) =
+        crate::nginx_listen::importable_ports(&listens, &policy, &extra_skip);
+    let skipped: Vec<String> = skipped_pairs
+        .iter()
+        .map(|(p, r)| format!("{p}={r}"))
+        .collect();
+    reject_frozen(
+        &flags,
+        "import-listen",
+        &binding.tenant,
+        &binding.site,
+        &ports,
+    )?;
     if flags.bool_flag("dry-run") {
         println!("import-listen dry-run import={ports:?} skipped={skipped:?}");
         return Ok(());
     }
     let ports_file = ports_file_of(&flags);
     let mut desired = desired_or_empty(&ports_file, &policy_file)?;
-    for port in &ports { desired.insert(*port, binding.clone()); }
+    for port in &ports {
+        desired.insert(PortKey::new(*port, binding.dest), binding.clone());
+    }
     crate::policy::validate(&desired, &policy)?;
-    if ports.is_empty() { println!("import-listen: nothing importable; skipped={skipped:?}"); return Ok(()); }
+    if ports.is_empty() {
+        println!("import-listen: nothing importable; skipped={skipped:?}");
+        return Ok(());
+    }
     desired::write(&ports_file, &desired)?;
-    if let Some(path) = flags.get("central-out") { crate::central::write(Path::new(path), &desired)?; }
+    if let Some(path) = flags.get("central-out") {
+        crate::central::write(Path::new(path), &desired)?;
+    }
     println!("import-listen imported={ports:?} skipped={skipped:?} desired-only (nginx unchanged)");
     Ok(())
 }
 
 fn ctl_migrate(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["from-nginx", "drop-listen", "apply", "tls", "dry-run", "help"], &["nginx-conf", "from", "tenant", "site", "cert", "policy", "ports-file", "policy-file", "freeze-file", "central-out", "metrics-file", "skip"])?;
-    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    let flags = parse_go_flags(
+        args,
+        &[
+            "from-nginx",
+            "drop-listen",
+            "apply",
+            "tls",
+            "dry-run",
+            "help",
+        ],
+        &[
+            "nginx-conf",
+            "from",
+            "tenant",
+            "site",
+            "cert",
+            "policy",
+            "ports-file",
+            "policy-file",
+            "freeze-file",
+            "central-out",
+            "metrics-file",
+            "skip",
+        ],
+    )?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
     if flags.bool_flag("drop-listen") {
         if flags.bool_flag("apply") {
             bail!("migrate --drop-listen --apply is not implemented; conf rewrite is dry-run-only");
@@ -178,47 +339,122 @@ fn ctl_migrate(args: &[String]) -> Result<()> {
 }
 
 fn ctl_check_overlap(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["help"], &["nginx-conf", "ports-file", "policy-file", "pin-dir"])?;
-    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    let flags = parse_go_flags(
+        args,
+        &["help"],
+        &["nginx-conf", "ports-file", "policy-file", "pin-dir"],
+    )?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
     let desired = desired_or_empty(&ports_file_of(&flags), &policy_file_of(&flags))?;
     let (map, _) = map_if_available(&pin_dir_of(&flags));
     let conflicts = overlap(&real_ports(&nginx_conf_of(&flags))?, &desired, &map, &[]);
-    if conflicts.is_empty() { println!("overlap: none"); Ok(()) } else { bail!("overlapping ports: {conflicts:?}") }
+    if conflicts.is_empty() {
+        println!("overlap: none");
+        Ok(())
+    } else {
+        bail!("overlapping ports: {conflicts:?}")
+    }
 }
 
 fn ctl_retire_conf_listen(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["help", "drop-listen", "from-nginx", "apply", "dry-run", "tls"], &["nginx-conf", "from", "tenant", "site", "cert", "policy", "ports-file", "policy-file", "freeze-file", "central-out", "metrics-file", "skip"])?;
-    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    let flags = parse_go_flags(
+        args,
+        &[
+            "help",
+            "drop-listen",
+            "from-nginx",
+            "apply",
+            "dry-run",
+            "tls",
+        ],
+        &[
+            "nginx-conf",
+            "from",
+            "tenant",
+            "site",
+            "cert",
+            "policy",
+            "ports-file",
+            "policy-file",
+            "freeze-file",
+            "central-out",
+            "metrics-file",
+            "skip",
+        ],
+    )?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
     if flags.bool_flag("apply") {
         bail!("retire-conf-listen --apply is not implemented; conf rewrite is dry-run-only");
     }
     let text = fs::read_to_string(nginx_conf_of(&flags))?;
     let wanted: BTreeSet<u16> = if flags.args.is_empty() {
-        crate::nginx_listen::importable_listen_ports(&text).into_iter().collect()
+        crate::nginx_listen::importable_listen_ports(&text)
+            .into_iter()
+            .collect()
     } else {
         let mut set = BTreeSet::new();
-        for spec in &flags.args { set.extend(crate::ports::parse_port_list_flexible(spec)?); }
+        for spec in &flags.args {
+            set.extend(crate::ports::parse_port_list_flexible(spec)?);
+        }
         set
     };
     let mut found = false;
     for line in text.lines() {
         let ports = crate::nginx_listen::parse_listen_ports(line);
-        if ports.iter().any(|p| wanted.contains(p)) { println!("{line}"); found = true; }
+        if ports.iter().any(|p| wanted.contains(p)) {
+            println!("{line}");
+            found = true;
+        }
     }
-    if !found { println!("no nginx listen line found for requested ports"); }
+    if !found {
+        println!("no nginx listen line found for requested ports");
+    }
     println!("migrate --drop-listen is dry-run only; edit nginx manually then reload");
     Ok(())
 }
 
-pub(crate) fn status_value(nginx_conf: &Path, ports_file: &Path, policy_file: &Path, pin_dir: &Path, freeze_file: &Path, metrics_file: &Path) -> Result<serde_json::Value> {
-    status_value_with_stamp(nginx_conf, ports_file, policy_file, pin_dir, freeze_file, metrics_file, Path::new(crate::metrics::DEFAULT_APPLY_STAMP))
+pub(crate) fn status_value(
+    nginx_conf: &Path,
+    ports_file: &Path,
+    policy_file: &Path,
+    pin_dir: &Path,
+    freeze_file: &Path,
+    metrics_file: &Path,
+) -> Result<serde_json::Value> {
+    status_value_with_stamp(
+        nginx_conf,
+        ports_file,
+        policy_file,
+        pin_dir,
+        freeze_file,
+        metrics_file,
+        Path::new(crate::metrics::DEFAULT_APPLY_STAMP),
+    )
 }
 
-pub(crate) fn status_value_with_stamp(nginx_conf: &Path, ports_file: &Path, policy_file: &Path, pin_dir: &Path, freeze_file: &Path, metrics_file: &Path, apply_stamp: &Path) -> Result<serde_json::Value> {
+pub(crate) fn status_value_with_stamp(
+    nginx_conf: &Path,
+    ports_file: &Path,
+    policy_file: &Path,
+    pin_dir: &Path,
+    freeze_file: &Path,
+    metrics_file: &Path,
+    apply_stamp: &Path,
+) -> Result<serde_json::Value> {
     let real = real_ports(nginx_conf)?;
     let desired = desired_or_empty(ports_file, policy_file)?;
     let (map, available) = map_if_available(pin_dir);
-    let candidates: BTreeSet<u16> = desired.keys().copied().chain(map.keys().copied()).collect();
+    let candidates: BTreeSet<u16> = desired
+        .keys()
+        .map(|k| k.port)
+        .chain(map.keys().map(|k| k.port))
+        .collect();
     let virtual_ports: Vec<u16> = candidates.difference(&real).copied().collect();
     let overlap_ports: Vec<u16> = candidates.intersection(&real).copied().collect();
     let plan = desired::plan(&desired, &map);
@@ -228,7 +464,7 @@ pub(crate) fn status_value_with_stamp(nginx_conf: &Path, ports_file: &Path, poli
         "real": real.iter().copied().collect::<Vec<_>>(), "virtual": virtual_ports,
         "overlap": overlap_ports, "frozen": freeze_file.exists(), "desired_count": desired.len(),
         "port_count": desired.len(),
-        "map_count": map.len(), "file_map_agree": available && desired.iter().all(|(p,b)| map.get(p) == Some(&b.slot)) && map.len() == desired.len(),
+        "map_count": map.len(), "file_map_agree": available && desired.iter().all(|(k,b)| map.get(k).map(|v| v.group) == Some(b.slot)) && map.len() == desired.len(),
         "virtual_listen_count": candidates.difference(&real).count(), "real_listen_count": real.len(),
         "overlap_count": candidates.intersection(&real).count(),
         "conflict_count": candidates.intersection(&real).count(),
@@ -239,19 +475,52 @@ pub(crate) fn status_value_with_stamp(nginx_conf: &Path, ports_file: &Path, poli
 }
 
 fn apply_stamp_of(flags: &ParsedFlags) -> PathBuf {
-    PathBuf::from(flags.get("apply-stamp").unwrap_or(crate::metrics::DEFAULT_APPLY_STAMP))
+    PathBuf::from(
+        flags
+            .get("apply-stamp")
+            .unwrap_or(crate::metrics::DEFAULT_APPLY_STAMP),
+    )
 }
 
 fn ctl_status(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["help"], &["nginx-conf", "ports-file", "policy-file", "pin-dir", "freeze-file", "metrics-file", "apply-stamp"])?;
-    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
-    println!("{}", serde_json::to_string(&status_value_with_stamp(&nginx_conf_of(&flags), &ports_file_of(&flags), &policy_file_of(&flags), &pin_dir_of(&flags), &freeze_file_of(&flags), &metrics_file_of(&flags), &apply_stamp_of(&flags))?)?);
+    let flags = parse_go_flags(
+        args,
+        &["help"],
+        &[
+            "nginx-conf",
+            "ports-file",
+            "policy-file",
+            "pin-dir",
+            "freeze-file",
+            "metrics-file",
+            "apply-stamp",
+        ],
+    )?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&status_value_with_stamp(
+            &nginx_conf_of(&flags),
+            &ports_file_of(&flags),
+            &policy_file_of(&flags),
+            &pin_dir_of(&flags),
+            &freeze_file_of(&flags),
+            &metrics_file_of(&flags),
+            &apply_stamp_of(&flags)
+        )?)?
+    );
     Ok(())
 }
 
 pub fn enforce_ladder(ports: &[u16], explicit: bool) -> Result<()> {
     if ports.len() > 10_000 && !explicit && std::env::var("M3_FULL_LADDER").as_deref() != Ok("1") {
-        bail!("{} ports in one operation is disabled; set M3_FULL_LADDER=1 or use -full-ladder", ports.len());
+        bail!(
+            "{} ports in one operation is disabled; set M3_FULL_LADDER=1 or use -full-ladder",
+            ports.len()
+        );
     }
     Ok(())
 }
@@ -273,11 +542,18 @@ fn ports_file_of(flags: &ParsedFlags) -> PathBuf {
 }
 
 fn policy_file_of(flags: &ParsedFlags) -> PathBuf {
-    flags.get("policy-file").map(PathBuf::from).unwrap_or_else(|| crate::policy::default_path(&ports_file_of(flags)))
+    flags
+        .get("policy-file")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::policy::default_path(&ports_file_of(flags)))
 }
 
 fn freeze_file_of(flags: &ParsedFlags) -> PathBuf {
-    PathBuf::from(flags.get("freeze-file").unwrap_or(crate::freeze::DEFAULT_FREEZE_FILE))
+    PathBuf::from(
+        flags
+            .get("freeze-file")
+            .unwrap_or(crate::freeze::DEFAULT_FREEZE_FILE),
+    )
 }
 
 fn nginx_conf_of(flags: &ParsedFlags) -> PathBuf {
@@ -285,31 +561,79 @@ fn nginx_conf_of(flags: &ParsedFlags) -> PathBuf {
 }
 
 fn metrics_file_of(flags: &ParsedFlags) -> PathBuf {
-    PathBuf::from(flags.get("metrics-file").unwrap_or(crate::metrics::DEFAULT_METRICS_FILE))
+    PathBuf::from(
+        flags
+            .get("metrics-file")
+            .unwrap_or(crate::metrics::DEFAULT_METRICS_FILE),
+    )
 }
 
 fn real_ports(path: &Path) -> Result<BTreeSet<u16>> {
-    if !path.exists() { return Ok(crate::nginx_listen::inner_real_ports()); }
-    let text = fs::read_to_string(path).with_context(|| format!("read nginx config {}", path.display()))?;
+    if !path.exists() {
+        return Ok(crate::nginx_listen::inner_real_ports());
+    }
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("read nginx config {}", path.display()))?;
     Ok(crate::nginx_listen::real_listen_ports(&text))
 }
 
-fn overlap(real: &BTreeSet<u16>, desired: &DesiredPorts, map: &HashMap<u16, u8>, adding: &[u16]) -> Vec<u16> {
-    let candidates: BTreeSet<u16> = desired.keys().copied().chain(map.keys().copied()).chain(adding.iter().copied()).collect();
+/// Overlap is evaluated on the port alone: nginx.conf listens are port-scoped,
+/// so a steered entry scoped to one VIP still collides with a real listen.
+fn overlap(
+    real: &BTreeSet<u16>,
+    desired: &DesiredPorts,
+    map: &CurrentPorts,
+    adding: &[u16],
+) -> Vec<u16> {
+    let candidates: BTreeSet<u16> = desired
+        .keys()
+        .map(|k| k.port)
+        .chain(map.keys().map(|k| k.port))
+        .chain(adding.iter().copied())
+        .collect();
     real.intersection(&candidates).copied().collect()
 }
 
-fn fail_on_overlap(real: &BTreeSet<u16>, desired: &DesiredPorts, map: &HashMap<u16, u8>, adding: &[u16]) -> Result<()> {
+fn fail_on_overlap(
+    real: &BTreeSet<u16>,
+    desired: &DesiredPorts,
+    map: &CurrentPorts,
+    adding: &[u16],
+) -> Result<()> {
     let conflicts = overlap(real, desired, map, adding);
-    if !conflicts.is_empty() { bail!("real/virtual listen overlap: {conflicts:?}"); }
+    if !conflicts.is_empty() {
+        bail!("real/virtual listen overlap: {conflicts:?}");
+    }
     Ok(())
 }
 
-fn map_if_available(pin_dir: &Path) -> (HashMap<u16, u8>, bool) {
-    load_pinned_open_ports(pin_dir).and_then(|m| desired::read_map(&m)).map(|m| (m, true)).unwrap_or_default()
+fn map_if_available(pin_dir: &Path) -> (CurrentPorts, bool) {
+    load_pinned_open_ports(pin_dir)
+        .and_then(|m| desired::read_map(&m))
+        .map(|m| (m, true))
+        .unwrap_or_default()
 }
 
-fn reject_frozen(flags: &ParsedFlags, op: &str, tenant: &str, site: &str, ports: &[u16]) -> Result<()> {
+/// Shard count to stamp into entries written by this CLI.
+///
+/// The loader owns the authoritative value because it holds the listen FDs, so
+/// the CLI copies whatever the live map already uses rather than guessing.
+/// Guessing 1 here would silently narrow steering to a single worker.
+fn shards_of(map: &MapHandle) -> u8 {
+    desired::read_map(map)
+        .ok()
+        .and_then(|m| m.values().map(|v| v.shards).max())
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn reject_frozen(
+    flags: &ParsedFlags,
+    op: &str,
+    tenant: &str,
+    site: &str,
+    ports: &[u16],
+) -> Result<()> {
     crate::freeze::reject_if_frozen(&freeze_file_of(flags), op, tenant, site, ports)
 }
 
@@ -319,7 +643,14 @@ fn binding_from_flags(flags: &ParsedFlags) -> Result<PortBinding> {
     if tenant.is_empty() || site.is_empty() {
         bail!("open/add requires -tenant and -site (binding is mandatory; see docs/binding.md)");
     }
-    Ok(PortBinding { slot: ctl_slot(flags.bool_flag("tls")), tenant: tenant.into(), site: site.into(), cert: flags.get("cert").map(str::to_owned), policy: flags.get("policy").map(str::to_owned) })
+    Ok(PortBinding {
+        slot: ctl_slot(flags.bool_flag("tls")),
+        tenant: tenant.into(),
+        site: site.into(),
+        cert: flags.get("cert").map(str::to_owned),
+        policy: flags.get("policy").map(str::to_owned),
+        dest: dest_of(flags)?,
+    })
 }
 
 fn maybe_help(flags: &ParsedFlags) -> bool {
@@ -330,7 +661,20 @@ fn ctl_add(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["tls", "stdin", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "policy-file", "freeze-file", "range", "file", "tenant", "site", "cert", "policy", "nginx-conf", "metrics-file"],
+        &[
+            "pin-dir",
+            "ports-file",
+            "policy-file",
+            "freeze-file",
+            "range",
+            "file",
+            "tenant",
+            "site",
+            "cert",
+            "policy",
+            "nginx-conf",
+            "metrics-file",
+        ],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -405,14 +749,24 @@ fn ctl_remove(args: &[String]) -> Result<()> {
 
 fn format_listen_row(row: &crate::nginx_listen::ListenRow) -> String {
     let mut line = format!("{}	kind={}", row.port, row.kind.as_str());
-    if let Some(slot) = row.slot { line.push_str(&format!("	slot={slot}")); }
-    if let Some(tenant) = &row.tenant { line.push_str(&format!("	tenant={tenant}")); }
-    if let Some(site) = &row.site { line.push_str(&format!("	site={site}")); }
+    if let Some(slot) = row.slot {
+        line.push_str(&format!("	slot={slot}"));
+    }
+    if let Some(tenant) = &row.tenant {
+        line.push_str(&format!("	tenant={tenant}"));
+    }
+    if let Some(site) = &row.site {
+        line.push_str(&format!("	site={site}"));
+    }
     line
 }
 
 fn ctl_list(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["count", "json", "virtual", "help"], &["pin-dir", "ports-file", "policy-file", "nginx-conf", "kind"])?;
+    let flags = parse_go_flags(
+        args,
+        &["count", "json", "virtual", "help"],
+        &["pin-dir", "ports-file", "policy-file", "nginx-conf", "kind"],
+    )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
         return Ok(());
@@ -434,14 +788,18 @@ fn ctl_list(args: &[String]) -> Result<()> {
         } else if flags.bool_flag("count") {
             println!("count={}", rows.len());
         } else {
-            for row in rows { println!("{}", format_listen_row(&row)); }
+            for row in rows {
+                println!("{}", format_listen_row(&row));
+            }
         }
         return Ok(());
     }
     if flags.bool_flag("json") {
         let map = load_pinned_open_ports(&pin_dir_of(&flags))?;
-        let mut ports: Vec<u16> = desired::read_map(&map)?.into_keys().collect(); ports.sort_unstable();
-        println!("{}", serde_json::json!({"kind":"all","ports":ports})); return Ok(());
+        let mut ports: Vec<PortKey> = desired::read_map(&map)?.into_keys().collect();
+        ports.sort_unstable();
+        println!("{}", serde_json::json!({"kind":"all","ports":ports}));
+        return Ok(());
     }
     list_pinned_ports(&pin_dir_of(&flags), flags.bool_flag("count"))
 }
@@ -462,7 +820,21 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["tls", "stdin", "quiet", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "policy-file", "freeze-file", "range", "file", "batch", "tenant", "site", "cert", "policy", "nginx-conf", "metrics-file"],
+        &[
+            "pin-dir",
+            "ports-file",
+            "policy-file",
+            "freeze-file",
+            "range",
+            "file",
+            "batch",
+            "tenant",
+            "site",
+            "cert",
+            "policy",
+            "nginx-conf",
+            "metrics-file",
+        ],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -472,7 +844,13 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
     enforce_ladder(&ports, flags.bool_flag("full-ladder"))?;
     let batch = parse_batch(flags.get("batch"))?;
     let binding = binding_from_flags(&flags)?;
-    reject_frozen(&flags, "bulk open/add", &binding.tenant, &binding.site, &ports)?;
+    reject_frozen(
+        &flags,
+        "bulk open/add",
+        &binding.tenant,
+        &binding.site,
+        &ports,
+    )?;
     apply_add(
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
@@ -492,7 +870,15 @@ fn ctl_bulk_remove(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["stdin", "quiet", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "policy-file", "freeze-file", "range", "file", "batch"],
+        &[
+            "pin-dir",
+            "ports-file",
+            "policy-file",
+            "freeze-file",
+            "range",
+            "file",
+            "batch",
+        ],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -518,7 +904,22 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["tls", "quiet", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "policy-file", "freeze-file", "count", "start", "skip", "batch", "tenant", "site", "cert", "policy", "nginx-conf", "metrics-file"],
+        &[
+            "pin-dir",
+            "ports-file",
+            "policy-file",
+            "freeze-file",
+            "count",
+            "start",
+            "skip",
+            "batch",
+            "tenant",
+            "site",
+            "cert",
+            "policy",
+            "nginx-conf",
+            "metrics-file",
+        ],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -595,24 +996,52 @@ pub(crate) fn apply_add(
 ) -> Result<()> {
     let mut desired = desired_or_empty(ports_file, policy_file)?;
     let real = real_ports(nginx_conf)?;
-    if let Err(err) = fail_on_overlap(&real, &desired, &HashMap::new(), ports) {
+    if let Err(err) = fail_on_overlap(&real, &desired, &CurrentPorts::new(), ports) {
         crate::metrics::increment(metrics_file);
         return Err(err);
     }
-    for port in ports { desired.insert(*port, binding.clone()); }
+    for port in ports {
+        desired.insert(PortKey::new(*port, binding.dest), binding.clone());
+    }
     let policy = crate::policy::load(policy_file)?;
-    if let Err(err) = crate::policy::validate(&desired, &policy) { crate::metrics::increment(metrics_file); return Err(err); }
-    let m = match load_pinned_open_ports(pin_dir) { Ok(m) => m, Err(err) => { crate::metrics::increment(metrics_file); return Err(err); } };
+    if let Err(err) = crate::policy::validate(&desired, &policy) {
+        crate::metrics::increment(metrics_file);
+        return Err(err);
+    }
+    let m = match load_pinned_open_ports(pin_dir) {
+        Ok(m) => m,
+        Err(err) => {
+            crate::metrics::increment(metrics_file);
+            return Err(err);
+        }
+    };
     let current = desired::read_map(&m)?;
-    if let Err(err) = fail_on_overlap(&real, &desired, &current, &[]) { crate::metrics::increment(metrics_file); return Err(err); }
+    if let Err(err) = fail_on_overlap(&real, &desired, &current, &[]) {
+        crate::metrics::increment(metrics_file);
+        return Err(err);
+    }
     if sync_file {
         desired::write(ports_file, &desired)?;
     }
     let mut stderr = io::stderr();
     let mut prog: Option<&mut dyn Write> = if progress { Some(&mut stderr) } else { None };
-    let res = bulk_put_ports(&m, ports, binding.slot, batch, prog.as_deref_mut())?;
+    let keys: Vec<PortKey> = ports
+        .iter()
+        .map(|p| PortKey::new(*p, binding.dest))
+        .collect();
+    let res = bulk_put_keys(
+        &m,
+        &keys,
+        binding.slot,
+        shards_of(&m),
+        batch,
+        prog.as_deref_mut(),
+    )?;
     if summary {
-        println!("{}", format_bulk_summary("added", res.n, binding.slot, &res));
+        println!(
+            "{}",
+            format_bulk_summary("added", res.n, binding.slot, &res)
+        );
         return Ok(());
     }
     let label = if binding.slot == REDIR_TLS as u8 {
@@ -621,7 +1050,10 @@ pub(crate) fn apply_add(
         ""
     };
     for p in ports {
-        println!("opened steered port {p} → redir_socket[{}]{label}", binding.slot);
+        println!(
+            "opened steered port {p} → redir_socket[{}]{label}",
+            binding.slot
+        );
     }
     Ok(())
 }
@@ -640,13 +1072,17 @@ pub(crate) fn apply_remove(
     if sync_file {
         let mut desired = desired::load_with_policy(ports_file, policy_file)?;
         for port in ports {
-            desired.remove(port);
+            desired.remove(&PortKey::new(*port, Dest::AnyV4));
         }
         desired::write(ports_file, &desired)?;
     }
     let mut stderr = io::stderr();
     let mut prog: Option<&mut dyn Write> = if progress { Some(&mut stderr) } else { None };
-    let res = bulk_delete_ports(&m, ports, batch, prog.as_deref_mut())?;
+    let keys: Vec<PortKey> = ports
+        .iter()
+        .map(|p| PortKey::new(*p, Dest::AnyV4))
+        .collect();
+    let res = bulk_delete_keys(&m, &keys, batch, prog.as_deref_mut())?;
     if summary {
         println!("{}", format_remove_summary(&res));
         return Ok(());
@@ -698,7 +1134,16 @@ fn port_from_key(key: &[u8]) -> u16 {
 }
 
 pub fn close_pinned_ports(pin_dir: &Path, ports_file: &Path, ports: &[u16]) -> Result<()> {
-    apply_remove(pin_dir, ports_file, &crate::policy::default_path(ports_file), ports, DEFAULT_BULK_BATCH, false, false, true)
+    apply_remove(
+        pin_dir,
+        ports_file,
+        &crate::policy::default_path(ports_file),
+        ports,
+        DEFAULT_BULK_BATCH,
+        false,
+        false,
+        true,
+    )
 }
 
 pub fn open_pinned_ports(
@@ -717,8 +1162,12 @@ pub fn open_pinned_ports(
         apply_add(
             pin_dir,
             ports_file,
-            policy_file, http_ports,
-            &PortBinding { slot: REDIR_PRIMARY as u8, ..binding.clone() },
+            policy_file,
+            http_ports,
+            &PortBinding {
+                slot: REDIR_PRIMARY as u8,
+                ..binding.clone()
+            },
             DEFAULT_BULK_BATCH,
             false,
             false,
@@ -731,8 +1180,12 @@ pub fn open_pinned_ports(
         apply_add(
             pin_dir,
             ports_file,
-            policy_file, tls_ports,
-            &PortBinding { slot: REDIR_TLS as u8, ..binding.clone() },
+            policy_file,
+            tls_ports,
+            &PortBinding {
+                slot: REDIR_TLS as u8,
+                ..binding.clone()
+            },
             DEFAULT_BULK_BATCH,
             false,
             false,
@@ -745,11 +1198,27 @@ pub fn open_pinned_ports(
 }
 
 fn desired_or_empty(path: &Path, policy_file: &Path) -> Result<DesiredPorts> {
-    if path.exists() { desired::load_with_policy(path, policy_file) } else { Ok(DesiredPorts::new()) }
+    if path.exists() {
+        desired::load_with_policy(path, policy_file)
+    } else {
+        Ok(DesiredPorts::new())
+    }
 }
 
 pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["quiet", "help"], &["pin-dir", "ports-file", "policy-file", "freeze-file", "batch", "nginx-conf", "metrics-file"])?;
+    let flags = parse_go_flags(
+        args,
+        &["quiet", "help"],
+        &[
+            "pin-dir",
+            "ports-file",
+            "policy-file",
+            "freeze-file",
+            "batch",
+            "nginx-conf",
+            "metrics-file",
+        ],
+    )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
         return Ok(());
@@ -757,34 +1226,48 @@ pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
     reject_frozen(&flags, "reconcile/apply", "", "", &[])?;
     let desired = desired::load_with_policy(&ports_file_of(&flags), &policy_file_of(&flags))?;
     let real = real_ports(&nginx_conf_of(&flags))?;
-    if let Err(err) = fail_on_overlap(&real, &desired, &HashMap::new(), &[]) { crate::metrics::increment(&metrics_file_of(&flags)); return Err(err); }
-    let map = match load_pinned_open_ports(&pin_dir_of(&flags)) { Ok(m) => m, Err(err) => { crate::metrics::increment(&metrics_file_of(&flags)); return Err(err); } };
+    if let Err(err) = fail_on_overlap(&real, &desired, &CurrentPorts::new(), &[]) {
+        crate::metrics::increment(&metrics_file_of(&flags));
+        return Err(err);
+    }
+    let map = match load_pinned_open_ports(&pin_dir_of(&flags)) {
+        Ok(m) => m,
+        Err(err) => {
+            crate::metrics::increment(&metrics_file_of(&flags));
+            return Err(err);
+        }
+    };
     let current = desired::read_map(&map)?;
-    if let Err(err) = fail_on_overlap(&real, &desired, &current, &[]) { crate::metrics::increment(&metrics_file_of(&flags)); return Err(err); }
+    if let Err(err) = fail_on_overlap(&real, &desired, &current, &[]) {
+        crate::metrics::increment(&metrics_file_of(&flags));
+        return Err(err);
+    }
     let plan = desired::plan(&desired, &current);
     let batch = parse_batch(flags.get("batch"))?;
     let mut stderr = io::stderr();
     let progress = !flags.bool_flag("quiet");
     if !plan.put_primary.is_empty() {
-        bulk_put_ports(
+        bulk_put_keys(
             &map,
             &plan.put_primary,
             REDIR_PRIMARY as u8,
+            shards_of(&map),
             batch,
             if progress { Some(&mut stderr) } else { None },
         )?;
     }
     if !plan.put_tls.is_empty() {
-        bulk_put_ports(
+        bulk_put_keys(
             &map,
             &plan.put_tls,
             REDIR_TLS as u8,
+            shards_of(&map),
             batch,
             if progress { Some(&mut stderr) } else { None },
         )?;
     }
     if !plan.delete.is_empty() {
-        bulk_delete_ports(
+        bulk_delete_keys(
             &map,
             &plan.delete,
             batch,
@@ -802,21 +1285,72 @@ pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
 }
 
 fn ctl_apply_central(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["quiet", "help"], &["from", "from-central", "pin-dir", "ports-file", "policy-file", "freeze-file", "batch", "nginx-conf", "metrics-file", "apply-stamp"])?;
-    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    let flags = parse_go_flags(
+        args,
+        &["quiet", "help"],
+        &[
+            "from",
+            "from-central",
+            "pin-dir",
+            "ports-file",
+            "policy-file",
+            "freeze-file",
+            "batch",
+            "nginx-conf",
+            "metrics-file",
+            "apply-stamp",
+        ],
+    )?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
     reject_frozen(&flags, "apply-central", "", "", &[])?;
-    let source = flags.get("from").or_else(|| flags.get("from-central")).unwrap_or("central/desired-state.json");
+    let source = flags
+        .get("from")
+        .or_else(|| flags.get("from-central"))
+        .unwrap_or("central/desired-state.json");
     let incoming = crate::central::load(Path::new(source))?;
     crate::policy::validate(&incoming, &crate::policy::load(&policy_file_of(&flags))?)?;
     let real = real_ports(&nginx_conf_of(&flags))?;
-    if let Err(err) = fail_on_overlap(&real, &incoming, &HashMap::new(), &[]) { crate::metrics::increment(&metrics_file_of(&flags)); return Err(err); }
+    if let Err(err) = fail_on_overlap(&real, &incoming, &CurrentPorts::new(), &[]) {
+        crate::metrics::increment(&metrics_file_of(&flags));
+        return Err(err);
+    }
     let (current, available) = map_if_available(&pin_dir_of(&flags));
-    if available { if let Err(err) = fail_on_overlap(&real, &incoming, &current, &[]) { crate::metrics::increment(&metrics_file_of(&flags)); return Err(err); } }
-    crate::central::apply_cache(Path::new(source), &ports_file_of(&flags), &policy_file_of(&flags))?;
-    let mut reconcile = vec!["-pin-dir".into(), pin_dir_of(&flags).display().to_string(), "-ports-file".into(), ports_file_of(&flags).display().to_string(), "-policy-file".into(), policy_file_of(&flags).display().to_string(), "-freeze-file".into(), freeze_file_of(&flags).display().to_string()];
-    if flags.bool_flag("quiet") { reconcile.push("-quiet".into()); }
-    if let Some(batch) = flags.get("batch") { reconcile.extend(["-batch".into(), batch.into()]); }
-    reconcile.extend(["-nginx-conf".into(), nginx_conf_of(&flags).display().to_string(), "-metrics-file".into(), metrics_file_of(&flags).display().to_string()]);
+    if available {
+        if let Err(err) = fail_on_overlap(&real, &incoming, &current, &[]) {
+            crate::metrics::increment(&metrics_file_of(&flags));
+            return Err(err);
+        }
+    }
+    crate::central::apply_cache(
+        Path::new(source),
+        &ports_file_of(&flags),
+        &policy_file_of(&flags),
+    )?;
+    let mut reconcile = vec![
+        "-pin-dir".into(),
+        pin_dir_of(&flags).display().to_string(),
+        "-ports-file".into(),
+        ports_file_of(&flags).display().to_string(),
+        "-policy-file".into(),
+        policy_file_of(&flags).display().to_string(),
+        "-freeze-file".into(),
+        freeze_file_of(&flags).display().to_string(),
+    ];
+    if flags.bool_flag("quiet") {
+        reconcile.push("-quiet".into());
+    }
+    if let Some(batch) = flags.get("batch") {
+        reconcile.extend(["-batch".into(), batch.into()]);
+    }
+    reconcile.extend([
+        "-nginx-conf".into(),
+        nginx_conf_of(&flags).display().to_string(),
+        "-metrics-file".into(),
+        metrics_file_of(&flags).display().to_string(),
+    ]);
     ctl_reconcile(&reconcile)?;
     let _ = crate::metrics::write_apply_stamp(&apply_stamp_of(&flags));
     Ok(())
@@ -824,30 +1358,60 @@ fn ctl_apply_central(args: &[String]) -> Result<()> {
 
 fn ctl_close_all(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(args, &["quiet", "help"], &["pin-dir", "batch"])?;
-    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
     let map = load_pinned_open_ports(&pin_dir_of(&flags))?;
-    let mut ports: Vec<u16> = desired::read_map(&map)?.into_keys().collect();
+    let mut ports: Vec<PortKey> = desired::read_map(&map)?.into_keys().collect();
     ports.sort_unstable();
     let batch = parse_batch(flags.get("batch"))?;
     let mut stderr = io::stderr();
-    let result = bulk_delete_ports(&map, &ports, batch, if flags.bool_flag("quiet") { None } else { Some(&mut stderr) })?;
+    let result = bulk_delete_keys(
+        &map,
+        &ports,
+        batch,
+        if flags.bool_flag("quiet") {
+            None
+        } else {
+            Some(&mut stderr)
+        },
+    )?;
     println!("close-all removed={} (ports.conf unchanged)", result.n);
     Ok(())
 }
 
 fn ctl_freeze(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["close-all", "help", "quiet"], &["freeze-file", "pin-dir", "batch"])?;
-    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    let flags = parse_go_flags(
+        args,
+        &["close-all", "help", "quiet"],
+        &["freeze-file", "pin-dir", "batch"],
+    )?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
     let path = freeze_file_of(&flags);
     crate::freeze::set_frozen(&path)?;
     println!("machine frozen state={}", path.display());
     if flags.bool_flag("close-all") {
         let mut close = vec!["-pin-dir".into(), pin_dir_of(&flags).display().to_string()];
-        if flags.bool_flag("quiet") { close.push("-quiet".into()); }
-        if let Some(batch) = flags.get("batch") { close.extend(["-batch".into(), batch.into()]); }
+        if flags.bool_flag("quiet") {
+            close.push("-quiet".into());
+        }
+        if let Some(batch) = flags.get("batch") {
+            close.extend(["-batch".into(), batch.into()]);
+        }
         let result = ctl_close_all(&close);
-        let cred = crate::sockctl::PeerCred { pid: std::process::id() as i32, uid: unsafe { libc::getuid() }, gid: unsafe { libc::getgid() } };
-        eprintln!("{}", crate::sockctl::audit_line(cred, "close-all", "", "", &[], result.is_ok()));
+        let cred = crate::sockctl::PeerCred {
+            pid: std::process::id() as i32,
+            uid: unsafe { libc::getuid() },
+            gid: unsafe { libc::getgid() },
+        };
+        eprintln!(
+            "{}",
+            crate::sockctl::audit_line(cred, "close-all", "", "", &[], result.is_ok())
+        );
         result?;
     }
     Ok(())
@@ -855,10 +1419,16 @@ fn ctl_freeze(args: &[String]) -> Result<()> {
 
 fn ctl_unfreeze(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(args, &["help"], &["freeze-file"])?;
-    if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
     let path = freeze_file_of(&flags);
     crate::freeze::clear_frozen(&path)?;
-    println!("machine unfrozen state={} (ports unchanged)", path.display());
+    println!(
+        "machine unfrozen state={} (ports unchanged)",
+        path.display()
+    );
     Ok(())
 }
 
@@ -874,10 +1444,15 @@ pub fn pin_max() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn strings(items: &[&str]) -> Vec<String> { items.iter().map(|s| (*s).into()).collect() }
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).into()).collect()
+    }
 
     fn fixture() -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let dir = std::env::temp_dir().join(format!("waf-e8-{}-{n}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let ports = dir.join("ports.conf");
@@ -885,7 +1460,11 @@ mod tests {
         let nginx = dir.join("nginx.conf");
         let pin = dir.join("missing-pin");
         let metrics = dir.join("metrics");
-        fs::write(&policy, "allow_privileged=\nmax_ports_per_tenant=32\nmax_ports_per_machine=128\n").unwrap();
+        fs::write(
+            &policy,
+            "allow_privileged=\nmax_ports_per_tenant=32\nmax_ports_per_machine=128\n",
+        )
+        .unwrap();
         (dir, ports, policy, nginx, pin, metrics)
     }
 
@@ -904,7 +1483,13 @@ mod tests {
 
     #[test]
     fn emergency_commands_parse() {
-        assert!(parse_go_flags(&["--close-all".into(), "-freeze-file".into(), "/tmp/f".into()], &["close-all"], &["freeze-file"]).unwrap().bool_flag("close-all"));
+        assert!(parse_go_flags(
+            &["--close-all".into(), "-freeze-file".into(), "/tmp/f".into()],
+            &["close-all"],
+            &["freeze-file"]
+        )
+        .unwrap()
+        .bool_flag("close-all"));
         assert!(crate::cli::is_ctl_command("close-all"));
         assert!(crate::cli::is_ctl_command("apply-central"));
     }
@@ -915,8 +1500,21 @@ mod tests {
         fs::write(&ports, "# desired open_ports\n18082 acme www\n").unwrap();
         fs::write(&nginx, "listen 18081;\n").unwrap();
         let before = fs::read(&ports).unwrap();
-        let binding = PortBinding { slot: REDIR_PRIMARY as u8, tenant:"acme".into(), site:"www".into(), cert:None, policy:None };
-        let err = apply_add(&pin, &ports, &policy, &[18081], &binding, 16, false, false, true, &nginx, &metrics).unwrap_err();
+        let binding = PortBinding::new(REDIR_PRIMARY as u8, "acme", "www");
+        let err = apply_add(
+            &pin,
+            &ports,
+            &policy,
+            &[18081],
+            &binding,
+            16,
+            false,
+            false,
+            true,
+            &nginx,
+            &metrics,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("overlap"));
         assert_eq!(fs::read(&ports).unwrap(), before);
         assert_eq!(crate::metrics::read(&metrics), 1);
@@ -929,14 +1527,48 @@ mod tests {
         fs::write(&ports, "# desired open_ports\n18082 acme www\n").unwrap();
         let before = fs::read(&ports).unwrap();
         let central = dir.join("central.json");
-        fs::write(&central, r#"{"version":1,"ports":[{"tenant":"acme","site":"www","port":18081}]}"#).unwrap();
-        let args = strings(&["-from", central.to_str().unwrap(), "-ports-file", ports.to_str().unwrap(), "-policy-file", policy.to_str().unwrap(), "-nginx-conf", nginx.to_str().unwrap(), "-pin-dir", pin.to_str().unwrap(), "-metrics-file", metrics.to_str().unwrap()]);
-        assert!(ctl_apply_central(&args).unwrap_err().to_string().contains("overlap"));
+        fs::write(
+            &central,
+            r#"{"version":1,"ports":[{"tenant":"acme","site":"www","port":18081}]}"#,
+        )
+        .unwrap();
+        let args = strings(&[
+            "-from",
+            central.to_str().unwrap(),
+            "-ports-file",
+            ports.to_str().unwrap(),
+            "-policy-file",
+            policy.to_str().unwrap(),
+            "-nginx-conf",
+            nginx.to_str().unwrap(),
+            "-pin-dir",
+            pin.to_str().unwrap(),
+            "-metrics-file",
+            metrics.to_str().unwrap(),
+        ]);
+        assert!(ctl_apply_central(&args)
+            .unwrap_err()
+            .to_string()
+            .contains("overlap"));
         assert_eq!(fs::read(&ports).unwrap(), before);
         fs::write(&ports, "# desired open_ports\n8080 acme www\n").unwrap();
         let overlap_before = fs::read(&ports).unwrap();
-        let args = strings(&["-ports-file", ports.to_str().unwrap(), "-policy-file", policy.to_str().unwrap(), "-nginx-conf", nginx.to_str().unwrap(), "-pin-dir", pin.to_str().unwrap(), "-metrics-file", metrics.to_str().unwrap()]);
-        assert!(ctl_reconcile(&args).unwrap_err().to_string().contains("overlap"));
+        let args = strings(&[
+            "-ports-file",
+            ports.to_str().unwrap(),
+            "-policy-file",
+            policy.to_str().unwrap(),
+            "-nginx-conf",
+            nginx.to_str().unwrap(),
+            "-pin-dir",
+            pin.to_str().unwrap(),
+            "-metrics-file",
+            metrics.to_str().unwrap(),
+        ]);
+        assert!(ctl_reconcile(&args)
+            .unwrap_err()
+            .to_string()
+            .contains("overlap"));
         assert_eq!(fs::read(&ports).unwrap(), overlap_before);
     }
 
@@ -945,12 +1577,36 @@ mod tests {
         let (dir, ports, policy, nginx, _pin, _metrics) = fixture();
         fs::write(&nginx, "listen 80;\nlisten 443 ssl;\nlisten 19001;\n").unwrap();
         let before = fs::read(&nginx).unwrap();
-        let args = strings(&["-nginx-conf", nginx.to_str().unwrap(), "-ports-file", ports.to_str().unwrap(), "-policy-file", policy.to_str().unwrap(), "-tenant", "acme", "-site", "www"]);
+        let args = strings(&[
+            "-nginx-conf",
+            nginx.to_str().unwrap(),
+            "-ports-file",
+            ports.to_str().unwrap(),
+            "-policy-file",
+            policy.to_str().unwrap(),
+            "-tenant",
+            "acme",
+            "-site",
+            "www",
+        ]);
         ctl_import_listens(&args).unwrap();
         let desired = fs::read_to_string(&ports).unwrap();
-        assert!(desired.contains("19001 acme www")); assert!(!desired.lines().any(|l| l.starts_with("80 ") || l.starts_with("443 ")));
+        assert!(desired.contains("19001 acme www"));
+        assert!(!desired
+            .lines()
+            .any(|l| l.starts_with("80 ") || l.starts_with("443 ")));
         let dry_path = dir.join("dry.conf");
-        let dry = strings(&["-dry-run", "-nginx-conf", nginx.to_str().unwrap(), "-ports-file", dry_path.to_str().unwrap(), "-tenant", "acme", "-site", "www"]);
+        let dry = strings(&[
+            "-dry-run",
+            "-nginx-conf",
+            nginx.to_str().unwrap(),
+            "-ports-file",
+            dry_path.to_str().unwrap(),
+            "-tenant",
+            "acme",
+            "-site",
+            "www",
+        ]);
         ctl_import_listens(&dry).unwrap();
         assert_eq!(fs::read(&nginx).unwrap(), before);
         assert!(!dry_path.exists());
@@ -959,11 +1615,30 @@ mod tests {
     #[test]
     fn freeze_rejects_import_without_writes() {
         let (dir, ports, policy, nginx, _pin, _metrics) = fixture();
-        fs::write(&nginx, "listen 19001;\n").unwrap(); let before = fs::read(&nginx).unwrap();
-        let frozen = dir.join("frozen"); fs::write(&frozen, "frozen\n").unwrap();
-        let args = strings(&["-nginx-conf", nginx.to_str().unwrap(), "-ports-file", ports.to_str().unwrap(), "-policy-file", policy.to_str().unwrap(), "-freeze-file", frozen.to_str().unwrap(), "-tenant", "acme", "-site", "www"]);
-        assert!(ctl_import_listens(&args).unwrap_err().to_string().contains("frozen"));
-        assert!(!ports.exists()); assert_eq!(fs::read(&nginx).unwrap(), before);
+        fs::write(&nginx, "listen 19001;\n").unwrap();
+        let before = fs::read(&nginx).unwrap();
+        let frozen = dir.join("frozen");
+        fs::write(&frozen, "frozen\n").unwrap();
+        let args = strings(&[
+            "-nginx-conf",
+            nginx.to_str().unwrap(),
+            "-ports-file",
+            ports.to_str().unwrap(),
+            "-policy-file",
+            policy.to_str().unwrap(),
+            "-freeze-file",
+            frozen.to_str().unwrap(),
+            "-tenant",
+            "acme",
+            "-site",
+            "www",
+        ]);
+        assert!(ctl_import_listens(&args)
+            .unwrap_err()
+            .to_string()
+            .contains("frozen"));
+        assert!(!ports.exists());
+        assert_eq!(fs::read(&nginx).unwrap(), before);
     }
 
     #[test]
@@ -972,12 +1647,23 @@ mod tests {
         fs::write(&nginx, "listen 8080;\nlisten 8443 ssl;\n").unwrap();
         fs::write(&ports, "# desired open_ports\n18081 acme www\n").unwrap();
         let v = status_value(&nginx, &ports, &policy, &pin, &dir.join("frozen"), &metrics).unwrap();
-        assert!(v["real"].as_array().unwrap().contains(&serde_json::json!(8080)));
-        assert!(v["real"].as_array().unwrap().contains(&serde_json::json!(8443)));
-        assert_eq!(v["virtual"], serde_json::json!([18081])); assert_eq!(v["overlap"], serde_json::json!([]));
-        assert_eq!(v["map_count"], 0); assert_eq!(v["file_map_agree"], false);
+        assert!(v["real"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(8080)));
+        assert!(v["real"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(8443)));
+        assert_eq!(v["virtual"], serde_json::json!([18081]));
+        assert_eq!(v["overlap"], serde_json::json!([]));
+        assert_eq!(v["map_count"], 0);
+        assert_eq!(v["file_map_agree"], false);
         let real = real_ports(&nginx).unwrap();
-        let virtuals: Vec<u16> = [8080, 18081].into_iter().filter(|p| !real.contains(p)).collect();
+        let virtuals: Vec<u16> = [8080, 18081]
+            .into_iter()
+            .filter(|p| !real.contains(p))
+            .collect();
         assert_eq!(virtuals, vec![18081]);
         assert_eq!(v["port_count"], 1);
         assert_eq!(v["conflict_count"], 0);
@@ -991,14 +1677,20 @@ mod tests {
     fn list_table_marks_virtual_vs_real() {
         let desired = DesiredPorts::new();
         let mut desired = desired;
-        desired.insert(18081, PortBinding { slot: REDIR_PRIMARY as u8, tenant:"acme".into(), site:"www".into(), cert:None, policy:None });
+        desired.insert(
+            PortKey::wildcard_v4(18081),
+            PortBinding::new(REDIR_PRIMARY as u8, "acme", "www"),
+        );
         let real = [80u16, 8080].into_iter().collect();
-        let rows = crate::nginx_listen::classify(&desired, &HashMap::new(), &real);
+        let rows = crate::nginx_listen::classify(&desired, &CurrentPorts::new(), &real);
         let kinds: Vec<_> = rows.iter().map(|r| (r.port, r.kind.as_str())).collect();
         assert!(kinds.contains(&(18081, "virtual")));
         assert!(kinds.contains(&(80, "real")));
         assert!(kinds.contains(&(8080, "real")));
-        assert_eq!(format_listen_row(rows.iter().find(|r| r.port == 18081).unwrap()), "18081\tkind=virtual\tslot=0\ttenant=acme\tsite=www");
+        assert_eq!(
+            format_listen_row(rows.iter().find(|r| r.port == 18081).unwrap()),
+            "18081\tkind=virtual\tslot=0\ttenant=acme\tsite=www"
+        );
     }
 
     #[test]
@@ -1006,10 +1698,23 @@ mod tests {
         let (_dir, _ports, _policy, nginx, _pin, _metrics) = fixture();
         fs::write(&nginx, "listen 19001;\nlisten 80;\n").unwrap();
         let before = fs::read(&nginx).unwrap();
-        let args = strings(&["--drop-listen", "-nginx-conf", nginx.to_str().unwrap(), "19001"]);
+        let args = strings(&[
+            "--drop-listen",
+            "-nginx-conf",
+            nginx.to_str().unwrap(),
+            "19001",
+        ]);
         ctl_migrate(&args).unwrap();
         assert_eq!(fs::read(&nginx).unwrap(), before);
-        let err = ctl_migrate(&strings(&["--drop-listen", "--apply", "-nginx-conf", nginx.to_str().unwrap(), "19001"])).unwrap_err().to_string();
+        let err = ctl_migrate(&strings(&[
+            "--drop-listen",
+            "--apply",
+            "-nginx-conf",
+            nginx.to_str().unwrap(),
+            "19001",
+        ]))
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("dry-run"));
         assert_eq!(fs::read(&nginx).unwrap(), before);
     }
@@ -1019,9 +1724,17 @@ mod tests {
         let (_dir, _ports, _policy, nginx, _pin, _metrics) = fixture();
         fs::write(&nginx, "listen 19001;\nlisten 80;\n").unwrap();
         let before = fs::read(&nginx).unwrap();
-        ctl_retire_conf_listen(&strings(&["-nginx-conf", nginx.to_str().unwrap(), "19001"])).unwrap();
+        ctl_retire_conf_listen(&strings(&["-nginx-conf", nginx.to_str().unwrap(), "19001"]))
+            .unwrap();
         assert_eq!(fs::read(&nginx).unwrap(), before);
-        let err = ctl_retire_conf_listen(&strings(&["--apply", "-nginx-conf", nginx.to_str().unwrap(), "19001"])).unwrap_err().to_string();
+        let err = ctl_retire_conf_listen(&strings(&[
+            "--apply",
+            "-nginx-conf",
+            nginx.to_str().unwrap(),
+            "19001",
+        ]))
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("dry-run"));
         assert_eq!(fs::read(&nginx).unwrap(), before);
     }
@@ -1033,7 +1746,20 @@ mod tests {
         let (_dir, ports, policy, nginx, _pin, _metrics) = fixture();
         fs::write(&nginx, "listen 80;\nlisten 19002;\n").unwrap();
         let before = fs::read(&nginx).unwrap();
-        ctl_migrate(&strings(&["--from-nginx", "-nginx-conf", nginx.to_str().unwrap(), "-ports-file", ports.to_str().unwrap(), "-policy-file", policy.to_str().unwrap(), "-tenant", "acme", "-site", "www"])).unwrap();
+        ctl_migrate(&strings(&[
+            "--from-nginx",
+            "-nginx-conf",
+            nginx.to_str().unwrap(),
+            "-ports-file",
+            ports.to_str().unwrap(),
+            "-policy-file",
+            policy.to_str().unwrap(),
+            "-tenant",
+            "acme",
+            "-site",
+            "www",
+        ]))
+        .unwrap();
         let desired = fs::read_to_string(&ports).unwrap();
         assert!(desired.contains("19002 acme www"));
         assert!(!desired.lines().any(|l| l.starts_with("80 ")));

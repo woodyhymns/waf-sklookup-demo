@@ -233,13 +233,17 @@ sudo ./rust/loader/target/release/waf-sklookup-loader list
 
 ## Not production
 
-This is a **kernel steering proof + M1/P1 wiring + M2 control plane**, not a full WAF integration. Still out of scope here:
+This is a **kernel steering proof + M1/P1 wiring + M2 control plane**, not a full WAF integration. It now includes a 64-shard-per-group `SO_REUSEPORT` sockmap model, IPv4/IPv6 destination-family keys, pidfd-backed worker ownership checks, pinned program/link identity validation, Prometheus metrics, and a configurable worker rescan interval (`-rescan-interval`, default `500ms`, minimum `100ms`).
 
-- M3 performance matrix ([docs/acceptance-m3.md](docs/acceptance-m3.md) stub; seed the map with `./scripts/m3-fill-ports.sh`)
+Still out of scope here:
+
+- M3 production hardware performance matrix ([docs/acceptance-m3.md](docs/acceptance-m3.md) stub; use `tests/e2e/bench-sklookup.sh` for reproducible real-kernel A/B sampling)
 - HTTP control-plane API (CLI bulk is the M3 contract)
 - Tengine runtime in the default helper (example conf + test plan only)
-- multi-worker reuseport sockmap
+- Full OpenResty WAF policy integration and production TLS/certificate lifecycle
+
+> The loader detects an unclean worker exit during its configured rescan window. Operators should choose `200–500ms` after measuring `/proc` scan cost at their worker count, or send `SIGUSR1` from the WAF worker lifecycle hook for immediate reconciliation.
 
 ## License
 
-Demo code: GPL-2.0 for the BPF program (required by helpers); userspace Go code Apache-2.0 / MIT as you prefer for derivatives — adjust before shipping product code.
+Demo code: GPL-2.0 for the BPF program (required by helpers); the Rust userspace loader has the license declared in `rust/loader/Cargo.toml`. Review and align all licensing before shipping product code.
