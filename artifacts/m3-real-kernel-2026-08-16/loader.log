@@ -1,0 +1,33 @@
+2026/08/16 12:28:58 exclusive loader lock acquired: /run/waf-sklookup/loader.lock
+2026/08/16 12:28:58 seeded missing desired ports file /tmp/waf-m3ns/ports.conf from -ports/-tls-ports
+2026/08/16 12:28:59 sk_lookup attached to current netns
+2026/08/16 12:28:59 pinned BPF objects under /sys/fs/bpf/waf-m3ns (maps, dispatch program, netns link)
+2026/08/16 12:28:59 dataplane identity: prog id=22 tag=54d365048953e520
+2026/08/16 12:28:59 openresty mode: product path is one internal listen (127.0.0.1:18080); sk_lookup does not classify HTTP vs TLS
+2026/08/16 12:28:59 waiting for listen socket on 127.0.0.1:18080 (timeout 10s)
+2026/08/16 12:28:59 discovered listen socket inode=16009 owned by pid=6739 for 127.0.0.1:18080
+2026/08/16 12:28:59 registered listening socket fd=15 in redir_socket[0] (group 0, shard 0)
+2026/08/16 12:28:59 registered listening socket fd=17 in redir_socket[1] (group 0, shard 1)
+2026/08/16 12:28:59 registered listening socket fd=19 in redir_socket[2] (group 0, shard 2)
+2026/08/16 12:28:59 registered listening socket fd=21 in redir_socket[3] (group 0, shard 3)
+2026/08/16 12:28:59 registered 4 listen shard(s) for 127.0.0.1:18080 in group 0 (inodes [16009, 13237, 16008, 13236])
+2026/08/16 12:28:59 opened steered port 18181 → redir group 0 (4 shard(s)); no userspace bind on that port
+======== OPENRESTY P1 READY ========
+Product: sk_lookup steers external ports to a fixed internal listen.
+Tengine https_allow_http: that one listen accepts HTTP and TLS.
+Stock 1.19.3.2: no https_allow_http; -tls-ports is a labeled fallback.
+Internal HTTP: curl -sS http://127.0.0.1:18080/
+Steered HTTP:  curl -sS http://127.0.0.1:18181/
+Default responses omit X-Waf-External-Port; access_log still has $waf_external_port.
+Expose header: WAF_EXPOSE_EXTERNAL_PORT=1 (restart OpenResty).
+M2 ctl: sudo $LOADER_BIN add|remove|list|bulk  (no OpenResty reload)
+Close:  sudo $LOADER_BIN remove 18081
+Reopen: sudo $LOADER_BIN add 18081
+Legacy: sudo $LOADER_BIN -mode close-port -ports 18081
+Ctrl+C to stop the loader (OpenResty keeps running).
+====================================
+2026/08/16 12:28:59 desired-state reconcile: put=0 delete=0 shards=4 file=/tmp/waf-m3ns/ports.conf
+2026/08/16 12:28:59 metrics exporter listening on http://127.0.0.1:19104/metrics
+2026/08/16 12:28:59 control socket disabled
+2026/08/16 12:28:59 OpenResty worker health rescan interval=500ms (SIGUSR1 triggers an immediate rescan)
+2026/08/16 12:28:59 shutting down loader (OpenResty keeps running)

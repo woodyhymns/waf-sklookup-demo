@@ -1,0 +1,4 @@
+M3_NETNS_PASS=1
+30k_wall_ms=44
+60k_wall_ms=66
+map_info=id=7 type=1 key_size=20 value_size=4 max_entries=131072 map_flags=0 name=open_ports

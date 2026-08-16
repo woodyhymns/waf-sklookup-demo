@@ -1,0 +1,10 @@
+M3 fill: count=30000 start=5000 skip="22,25,53,3306,6379,8080,8443,19104" pin=/sys/fs/bpf/waf-m3ns (no OpenResty reload)
+add 4096/30000 (13.7%) elapsed=1ms rate=2278851/s
+add 8192/30000 (27.3%) elapsed=3ms rate=2214700/s
+add 12288/30000 (41.0%) elapsed=5ms rate=2395206/s
+add 16384/30000 (54.6%) elapsed=6ms rate=2529657/s
+add 20480/30000 (68.3%) elapsed=7ms rate=2560453/s
+add 24576/30000 (81.9%) elapsed=10ms rate=2368062/s
+add 28672/30000 (95.6%) elapsed=11ms rate=2410292/s
+add 30000/30000 (100.0%) elapsed=12ms rate=2413813/s
+2026/08/16 12:28:59 audit uid=0 gid=0 pid=6759 op=bulk tenant=m3 site=netns-capacity ports=fill,-count,30000,-start,5000,-skip,22,25,53,3306,6379,8080,8443,19104,-tenant,m3,-site,netns-capacity,-pin-dir,/sys/fs/bpf/waf-m3ns,-ports-file,/tmp/waf-m3ns/ports.conf,-policy-file,/tmp/waf-m3ns/policy.conf,-no-file,-full-ladder ok=true

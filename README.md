@@ -222,6 +222,7 @@ sudo ./rust/loader/target/release/waf-sklookup-loader list
 | `docs/acceptance-m1.md` | QA checklist (M1-1…M1-5 required) |
 | `docs/acceptance-m2.md` | M2 QA: add/remove/list/bulk + 30K/60K fill |
 | `docs/acceptance-m3.md` | M3 stub (30K/60K memory ladder); seed via M2 bulk fill |
+| `docs/acceptance-m3-real-kernel-2026-08-16.md` | Real-kernel 30K/60K M3 capacity acceptance, raw evidence, isolation model, and remaining production gates |
 | `docs/design-thin-accept-openresty.md` | Transition design: PROXY v2 + thin-accept + OpenResty TLS |
 | `docs/perf-deep-compare.md` | Reload / PROXY / TPROXY / sk_lookup performance comparison |
 | `docs/waf-dynamic-port-sk-lookup-review-zh-CN.md` | 完整中文技术评审：可行性、性能、可观测性、风险分级与落地路线 |

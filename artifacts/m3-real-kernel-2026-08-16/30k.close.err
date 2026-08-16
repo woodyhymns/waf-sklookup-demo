@@ -1,0 +1,9 @@
+remove 4096/30000 (13.7%) elapsed=1ms rate=3400141/s
+remove 8192/30000 (27.3%) elapsed=2ms rate=3485640/s
+remove 12288/30000 (41.0%) elapsed=3ms rate=3600460/s
+remove 16384/30000 (54.6%) elapsed=4ms rate=3691619/s
+remove 20480/30000 (68.3%) elapsed=5ms rate=3777586/s
+remove 24576/30000 (81.9%) elapsed=6ms rate=3858474/s
+remove 28672/30000 (95.6%) elapsed=7ms rate=3923430/s
+remove 30000/30000 (100.0%) elapsed=7ms rate=3929283/s
+2026/08/16 12:28:59 audit uid=0 gid=0 pid=6789 op=close-all tenant= site= ports=-pin-dir,/sys/fs/bpf/waf-m3ns ok=true
