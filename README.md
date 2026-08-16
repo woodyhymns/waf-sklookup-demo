@@ -224,6 +224,11 @@ sudo ./rust/loader/target/release/waf-sklookup-loader list
 | `docs/acceptance-m3.md` | M3 stub (30K/60K memory ladder); seed via M2 bulk fill |
 | `docs/design-thin-accept-openresty.md` | Transition design: PROXY v2 + thin-accept + OpenResty TLS |
 | `docs/perf-deep-compare.md` | Reload / PROXY / TPROXY / sk_lookup performance comparison |
+| `docs/waf-dynamic-port-sk-lookup-review-zh-CN.md` | 完整中文技术评审：可行性、性能、可观测性、风险分级与落地路线 |
+| `docs/waf-dynamic-port-sk-lookup-review-en.md` | Full English technical review: feasibility, performance, observability, risks, and rollout |
+| `docs/waf-dynamic-port-action-items-zh-CN.md` | 按优先级可直接拆分的整改行动清单 |
+| `docs/production-hardening-fix-progress.md` | 本轮生产硬化修复、真实内核验证、性能结论与剩余 staging 门禁 |
+| `docs/acceptance-real-kernel-hardening-2026-08-16.md` | 可提交、可审计的真实内核验收记录 |
 
 ## Relation to the WAF plan
 
