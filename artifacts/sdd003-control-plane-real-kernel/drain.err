@@ -1,0 +1,1 @@
+2026/08/19 14:21:53 audit uid=0 gid=0 pid=36239 op=bulk tenant= site= ports=remove,-range,30000-31308,-full-ladder,-quiet,-pin-dir,/tmp/waf-sdd003-control/bpffs/pin,-ports-file,/tmp/waf-sdd003-control/work/ports.conf,-policy-file,/tmp/waf-sdd003-control/work/policy.conf,-freeze-file,/run/waf-sklookup/frozen ok=true

@@ -71,6 +71,10 @@ pub struct Request {
     /// is what every request meant before multi-VIP keys existed.
     #[serde(default)]
     pub addr: Option<String>,
+    /// Opaque desired-state revision read from status. A mismatch rejects the
+    /// request before any file or map mutation, preventing stale writers.
+    #[serde(default)]
+    pub expected_revision: Option<String>,
 }
 
 pub fn format_ports(ports: &[u16]) -> String {
@@ -387,6 +391,7 @@ fn execute(
                     pin_dir,
                     ports_file,
                     &crate::policy::default_path(ports_file),
+                    req.expected_revision.as_deref(),
                     &ports,
                     &binding,
                     DEFAULT_BULK_BATCH,
@@ -395,12 +400,19 @@ fn execute(
                     true,
                     Path::new("openresty/nginx.conf"),
                     Path::new(crate::metrics::DEFAULT_METRICS_FILE),
+                    Path::new(crate::freeze::DEFAULT_FREEZE_FILE),
                 )
             }
             "remove" | "close" => crate::ctl::apply_remove(
                 pin_dir,
                 ports_file,
                 &crate::policy::default_path(ports_file),
+                req.expected_revision.as_deref(),
+                Path::new(crate::metrics::DEFAULT_METRICS_FILE),
+                match req.addr.as_deref().filter(|v| !v.is_empty()) {
+                    Some(raw) => crate::key::Dest::parse(raw)?,
+                    None => crate::key::Dest::AnyV4,
+                },
                 &ports,
                 DEFAULT_BULK_BATCH,
                 false,
@@ -488,6 +500,7 @@ pub fn run_client(args: &[String]) -> Result<()> {
         policy: None,
         kind: None,
         addr: None,
+        expected_revision: None,
     };
     let rest = if req.op == "bulk" {
         if cmd.len() < 2 {
@@ -506,10 +519,26 @@ pub fn run_client(args: &[String]) -> Result<()> {
     };
     let values: &[&str] = if is_fill {
         &[
-            "count", "start", "skip", "tenant", "site", "cert", "policy", "addr",
+            "count",
+            "start",
+            "skip",
+            "tenant",
+            "site",
+            "cert",
+            "policy",
+            "addr",
+            "expected-revision",
         ]
     } else {
-        &["tenant", "site", "cert", "policy", "kind", "addr"]
+        &[
+            "tenant",
+            "site",
+            "cert",
+            "policy",
+            "kind",
+            "addr",
+            "expected-revision",
+        ]
     };
     let pf = crate::cli::parse_go_flags(rest, bools, values)?;
     req.tls = pf.bool_flag("tls");
@@ -524,6 +553,7 @@ pub fn run_client(args: &[String]) -> Result<()> {
     req.policy = pf.get("policy").map(str::to_owned);
     req.kind = pf.get("kind").map(str::to_owned);
     req.addr = pf.get("addr").map(str::to_owned);
+    req.expected_revision = pf.get("expected-revision").map(str::to_owned);
     for spec in &pf.args {
         req.ports
             .extend(crate::ports::parse_port_list_flexible(spec)?);
@@ -555,6 +585,8 @@ mod tests {
             "127.0.0.2".into(),
             "-tenant".into(),
             "acme".into(),
+            "-expected-revision".into(),
+            "0123456789abcdef".into(),
             "-sock".into(),
             "/tmp/ctl.sock".into(),
         ];
@@ -562,7 +594,16 @@ mod tests {
         assert_eq!(sock.as_deref(), Some("/tmp/ctl.sock"));
         assert_eq!(
             rest,
-            vec!["add", "19104", "-addr", "127.0.0.2", "-tenant", "acme"]
+            vec![
+                "add",
+                "19104",
+                "-addr",
+                "127.0.0.2",
+                "-tenant",
+                "acme",
+                "-expected-revision",
+                "0123456789abcdef",
+            ]
         );
     }
 

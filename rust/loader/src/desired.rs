@@ -1,7 +1,8 @@
 //! File-backed desired state for `open_ports`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{hash_map::DefaultHasher, BTreeMap, HashMap};
 use std::fs::{self, File};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
@@ -16,7 +17,7 @@ use crate::key::{Dest, PortKey, PortVal};
 use crate::pin::{OPEN_PORTS_MAX_ENTRIES, REDIR_PRIMARY, REDIR_TLS};
 use crate::ports::parse_port_list_flexible;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PortBinding {
     /// Protocol group inside `redir_socket` (0 = primary, 1 = stock TLS).
     pub slot: u8,
@@ -47,6 +48,19 @@ impl PortBinding {
 /// multi-VIP host must be able to steer the same port on one VIP without
 /// hijacking it on every other address.
 pub type DesiredPorts = BTreeMap<PortKey, PortBinding>;
+
+/// Opaque, deterministic revision for the canonical BTreeMap desired state.
+/// It is a stale-writer token, not a cryptographic integrity boundary: identity
+/// and policy manifests remain separately fail-closed.
+pub fn revision(desired: &DesiredPorts) -> String {
+    let mut hasher = DefaultHasher::new();
+    desired.len().hash(&mut hasher);
+    for (key, binding) in desired {
+        key.hash(&mut hasher);
+        binding.hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ReconcilePlan {
@@ -337,6 +351,26 @@ mod tests {
 
     fn v4(port: u16) -> PortKey {
         PortKey::wildcard_v4(port)
+    }
+
+    #[test]
+    fn revision_is_stable_and_changes_for_binding_or_endpoint() {
+        let mut a = DesiredPorts::new();
+        a.insert(
+            PortKey::wildcard_v4(18081),
+            PortBinding::new(REDIR_PRIMARY as u8, "acme", "www"),
+        );
+        let mut same = DesiredPorts::new();
+        same.insert(
+            PortKey::wildcard_v4(18081),
+            PortBinding::new(REDIR_PRIMARY as u8, "acme", "www"),
+        );
+        assert_eq!(revision(&a), revision(&same));
+        same.insert(
+            PortKey::new(18081, Dest::parse("127.0.0.2").unwrap()),
+            PortBinding::new(REDIR_PRIMARY as u8, "acme", "www"),
+        );
+        assert_ne!(revision(&a), revision(&same));
     }
 
     #[test]

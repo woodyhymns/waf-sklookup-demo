@@ -77,6 +77,8 @@ pub fn classify_rejection(error: &str) -> &'static str {
         "capacity"
     } else if error.contains("overlap") || error.contains("conflict") {
         "overlap"
+    } else if error.contains("stale desired revision") || error.contains("expected revision") {
+        "revision"
     } else if error.contains("frozen") {
         "frozen"
     } else if error.contains("identity") || error.contains("manifest") {
@@ -109,7 +111,14 @@ pub fn read_last_rejection(metrics_file: &Path) -> Option<String> {
         .filter(|value| {
             matches!(
                 value.as_str(),
-                "reservation" | "deny" | "capacity" | "overlap" | "frozen" | "identity" | "other"
+                "reservation"
+                    | "deny"
+                    | "capacity"
+                    | "overlap"
+                    | "revision"
+                    | "frozen"
+                    | "identity"
+                    | "other"
             )
         })
 }

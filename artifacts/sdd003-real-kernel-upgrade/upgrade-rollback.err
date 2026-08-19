@@ -1,0 +1,2 @@
+2026/08/19 14:07:37 audit uid=0 gid=0 pid=27873 op=upgrade tenant= site= ports=-candidate,/tmp/waf-sdd003/work/candidate-rollback.bpf.o,-health-window-ms,25,-pin-dir,/tmp/waf-sdd003/bpffs/pin,-freeze-file,/run/waf-sklookup/frozen ok=false
+2026/08/19 14:07:37 candidate health window: forced upgrade health failure

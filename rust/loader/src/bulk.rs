@@ -74,6 +74,44 @@ fn is_missing_key(err: &libbpf_rs::Error) -> bool {
 
 /// Batched put. `shards` is the live worker count for `group`; see
 /// `openresty::max_shards`.
+/// Snapshot exactly the keys a mutation is about to change. `None` means the
+/// key did not exist. Callers use this before map-first mutations so a failed
+/// desired-state file commit can restore the prior dataplane precisely.
+pub fn snapshot_keys(
+    map: &MapHandle,
+    keys: &[PortKey],
+) -> Result<std::collections::BTreeMap<PortKey, Option<PortVal>>> {
+    check_layout(map)?;
+    let mut snapshot = std::collections::BTreeMap::new();
+    for key in keys {
+        let value = map.lookup(&key.to_bytes(), MapFlags::ANY)?;
+        let parsed = value.as_deref().map(PortVal::from_bytes);
+        snapshot.insert(*key, parsed);
+    }
+    Ok(snapshot)
+}
+
+/// Restore a snapshot after a mutation fails after touching the map. This uses
+/// individual operations deliberately: recovery correctness matters more than
+/// batching and it handles keys that were previously absent.
+pub fn restore_snapshot(
+    map: &MapHandle,
+    snapshot: &std::collections::BTreeMap<PortKey, Option<PortVal>>,
+) -> Result<()> {
+    check_layout(map)?;
+    for (key, value) in snapshot {
+        match value {
+            Some(value) => map.update(&key.to_bytes(), &value.to_bytes(), MapFlags::ANY)?,
+            None => match map.delete(&key.to_bytes()) {
+                Ok(()) => {}
+                Err(err) if is_missing_key(&err) => {}
+                Err(err) => return Err(err.into()),
+            },
+        }
+    }
+    Ok(())
+}
+
 pub fn bulk_put_keys(
     map: &MapHandle,
     ports: &[PortKey],

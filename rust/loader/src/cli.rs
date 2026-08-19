@@ -99,6 +99,7 @@ pub fn is_ctl_command(s: &str) -> bool {
             | "migrate"
             | "check-overlap"
             | "retire-conf-listen"
+            | "upgrade"
             | "status"
             | "metrics"
             | "help"
@@ -399,7 +400,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ctl_command_set() {
+    fn upgrade_is_a_top_level_control_command() {
+        assert!(is_ctl_command("upgrade"));
+    }
+
+    #[test]
+    fn parse_mode_and_bpf() {
         for c in [
             "add",
             "remove",

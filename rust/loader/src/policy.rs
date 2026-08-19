@@ -36,6 +36,10 @@ pub struct Policy {
     pub allow_privileged: BTreeSet<u16>,
     pub max_ports_per_tenant: usize,
     pub max_ports_per_machine: usize,
+    /// Optional pressure threshold (1..=99) at which new mutations are
+    /// rejected before the pinned map is exhausted. `None` preserves legacy
+    /// quota-only behavior for existing policies.
+    pub pressure_freeze_pct: Option<u8>,
 }
 
 impl Default for Policy {
@@ -47,6 +51,7 @@ impl Default for Policy {
             allow_privileged: BTreeSet::new(),
             max_ports_per_tenant: 32,
             max_ports_per_machine: 128,
+            pressure_freeze_pct: None,
         }
     }
 }
@@ -124,6 +129,16 @@ fn parse(raw: &str) -> Result<Policy> {
                     .trim()
                     .parse()
                     .with_context(|| format!("line {line_no}: max_ports_per_machine"))?
+            }
+            "pressure_freeze_pct" => {
+                let pct: u8 = value
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("line {line_no}: pressure_freeze_pct"))?;
+                if !(1..=99).contains(&pct) {
+                    bail!("line {line_no}: pressure_freeze_pct must be in 1..=99");
+                }
+                out.pressure_freeze_pct = Some(pct);
             }
             other => bail!("line {line_no}: unknown policy key {other:?}"),
         }
@@ -245,6 +260,27 @@ pub fn validate(desired: &DesiredPorts, policy: &Policy) -> Result<()> {
 /// room for and the overflow only surfaces as `E2BIG` on the map write of
 /// whichever tenant happens to be applied last — an arbitrary victim, far from
 /// the change that caused it.
+/// Verify a projected number of `open_ports` entries against the optional
+/// pressure admission threshold. The threshold is intentionally exclusive: at
+/// `pct%` the controller stops accepting new state so operators retain
+/// headroom for recovery/rollback rather than racing the hard map limit.
+pub fn validate_pressure_entries(entries: usize, policy: &Policy) -> Result<()> {
+    let Some(pct) = policy.pressure_freeze_pct else {
+        return Ok(());
+    };
+    let capacity = crate::pin::OPEN_PORTS_MAX_ENTRIES as usize;
+    // Compare the ratio before rounding. For 131072 * 80%, 104857 entries is
+    // still below 80%; only 104858 reaches/exceeds it. A floored threshold
+    // would reject one valid entry early and make the policy boundary opaque.
+    let threshold_at_or_above = (capacity * pct as usize).div_ceil(100);
+    if entries.saturating_mul(100) >= capacity * pct as usize {
+        bail!(
+            "pressure freeze threshold reached: projected_entries={entries} threshold_at_or_above={threshold_at_or_above} capacity={capacity} pct={pct}; refuse new mutation before map exhaustion"
+        );
+    }
+    Ok(())
+}
+
 pub fn validate_capacity(policy: &Policy) -> Result<()> {
     let capacity = crate::pin::OPEN_PORTS_MAX_ENTRIES as usize;
     if policy.max_ports_per_machine > capacity {
@@ -261,6 +297,11 @@ pub fn validate_capacity(policy: &Policy) -> Result<()> {
             policy.max_ports_per_tenant,
             policy.max_ports_per_machine
         );
+    }
+    if let Some(pct) = policy.pressure_freeze_pct {
+        if !(1..=99).contains(&pct) {
+            bail!("pressure_freeze_pct must be in 1..=99");
+        }
     }
     Ok(())
 }
@@ -349,6 +390,24 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("exceeds max_ports_per_machine"), "{err}");
+    }
+
+    // SDD-003 / T-041: admission must reject before map exhaustion, with a
+    // policy-defined pressure threshold rather than an implicit E2BIG later.
+    #[test]
+    fn pressure_freeze_threshold_parses_and_rejects_projected_occupancy() {
+        let p = parse(
+            "max_ports_per_machine=131072\nmax_ports_per_tenant=131072\npressure_freeze_pct=80\n",
+        )
+        .unwrap();
+        assert_eq!(p.pressure_freeze_pct, Some(80));
+        assert!(validate_pressure_entries(104_857, &p).is_ok());
+        let err = validate_pressure_entries(104_858, &p)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("pressure freeze threshold"), "{err}");
+        let err = parse("pressure_freeze_pct=100\n").unwrap_err().to_string();
+        assert!(err.contains("1..=99"), "{err}");
     }
 
     #[test]

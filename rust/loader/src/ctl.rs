@@ -2,6 +2,7 @@
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::{
     collections::{BTreeSet, HashMap},
     fs,
@@ -12,7 +13,7 @@ use libbpf_rs::{MapCore, MapFlags, MapHandle};
 
 use crate::bulk::{
     bulk_delete_keys, bulk_put_keys, format_bulk_summary, format_remove_summary,
-    load_pinned_open_ports,
+    load_pinned_open_ports, restore_snapshot, snapshot_keys,
 };
 use crate::cli::{parse_go_flags, ParsedFlags};
 use crate::desired::{self, CurrentPorts, DesiredPorts, PortBinding};
@@ -46,6 +47,8 @@ Root CLI escape hatch (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-loader retire-conf-listen PORT [-nginx-conf PATH]   # dry-run only; --apply refused
   sudo ./waf-sklookup-loader list -virtual [-nginx-conf PATH] [-ports-file ports.conf]
   sudo ./waf-sklookup-loader status|metrics [-nginx-conf PATH] [-ports-file ports.conf]
+  sudo ./waf-sklookup-loader upgrade -candidate dispatch.bpf.o [-health-window-ms 5000] [-pin-dir DIR]
+  sudo ./waf-sklookup-loader upgrade status [-pin-dir DIR]
 
 Mutating commands update the desired file (default ports.conf) and the pinned map.
   Pass -no-file to edit the live map only (test/hygiene overlay; next reconcile restores the file).
@@ -76,6 +79,7 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
             | "import-listens"
             | "import-listen"
             | "migrate"
+            | "upgrade"
     );
     let result = match args[0].as_str() {
         "add" | "open" => ctl_add(&args[1..]),
@@ -98,6 +102,7 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
         "check-overlap" => ctl_check_overlap(&args[1..]),
         "retire-conf-listen" => ctl_retire_conf_listen(&args[1..]),
         "status" | "metrics" => ctl_status(&args[1..]),
+        "upgrade" => ctl_upgrade(&args[1..]),
         "help" => {
             eprint!("{CTL_USAGE}");
             Ok(())
@@ -469,6 +474,7 @@ pub(crate) fn status_value_with_stamp(
     Ok(serde_json::json!({
         "real": real.iter().copied().collect::<Vec<_>>(), "virtual": virtual_ports,
         "overlap": overlap_ports, "frozen": freeze_file.exists(), "desired_count": desired.len(),
+        "desired_revision": desired::revision(&desired),
         "port_count": desired.len(),
         "map_count": map.len(), "file_map_agree": available && desired.iter().all(|(k,b)| map.get(k).map(|v| v.group) == Some(b.slot)) && map.len() == desired.len(),
         "virtual_listen_count": candidates.difference(&real).count(), "real_listen_count": real.len(),
@@ -687,6 +693,7 @@ fn ctl_add(args: &[String]) -> Result<()> {
             "nginx-conf",
             "metrics-file",
             "addr",
+            "expected-revision",
         ],
     )?;
     if maybe_help(&flags) {
@@ -713,6 +720,7 @@ fn ctl_add(args: &[String]) -> Result<()> {
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
         &policy_file_of(&flags),
+        flags.get("expected-revision"),
         &ports,
         &binding,
         DEFAULT_BULK_BATCH,
@@ -721,6 +729,7 @@ fn ctl_add(args: &[String]) -> Result<()> {
         !flags.bool_flag("no-file"),
         &nginx_conf_of(&flags),
         &metrics_file_of(&flags),
+        &freeze_file_of(&flags),
     )
 }
 
@@ -728,7 +737,16 @@ fn ctl_remove(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(
         args,
         &["stdin", "help", "no-file", "full-ladder"],
-        &["pin-dir", "ports-file", "policy-file", "range", "file"],
+        &[
+            "pin-dir",
+            "ports-file",
+            "policy-file",
+            "range",
+            "file",
+            "addr",
+            "expected-revision",
+            "metrics-file",
+        ],
     )?;
     if maybe_help(&flags) {
         eprint!("{CTL_USAGE}");
@@ -752,6 +770,9 @@ fn ctl_remove(args: &[String]) -> Result<()> {
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
         &policy_file_of(&flags),
+        flags.get("expected-revision"),
+        &metrics_file_of(&flags),
+        dest_of(&flags)?,
         &ports,
         DEFAULT_BULK_BATCH,
         true,
@@ -772,6 +793,65 @@ fn format_listen_row(row: &crate::nginx_listen::ListenRow) -> String {
         line.push_str(&format!("	site={site}"));
     }
     line
+}
+
+fn ctl_upgrade(args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) == Some("status") {
+        let flags = parse_go_flags(&args[1..], &["help"], &["pin-dir"])?;
+        if maybe_help(&flags) {
+            eprint!("{CTL_USAGE}");
+            return Ok(());
+        }
+        let journal = crate::upgrade::read_journal(&pin_dir_of(&flags))?;
+        println!("{}", serde_json::to_string(&journal)?);
+        return Ok(());
+    }
+    let flags = parse_go_flags(
+        args,
+        &["help"],
+        &["pin-dir", "candidate", "health-window-ms", "freeze-file"],
+    )?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
+    let candidate = flags
+        .get("candidate")
+        .context("upgrade requires -candidate PATH")?;
+    let health_window_ms: u64 = flags
+        .get("health-window-ms")
+        .unwrap_or("5000")
+        .parse()
+        .context("bad -health-window-ms")?;
+    if health_window_ms == 0 {
+        bail!("-health-window-ms must be positive");
+    }
+    let freeze = freeze_file_of(&flags);
+    let was_frozen = crate::freeze::is_frozen(&freeze);
+    crate::freeze::set_frozen(&freeze)?;
+    let result = crate::upgrade::activate(
+        &pin_dir_of(&flags),
+        Path::new(candidate),
+        Duration::from_millis(health_window_ms),
+    );
+    match result {
+        Ok(journal) => {
+            if !was_frozen {
+                crate::freeze::clear_frozen(&freeze)?;
+            }
+            println!("{}", serde_json::to_string(&journal)?);
+            Ok(())
+        }
+        Err(err) => {
+            // Keep the stop state on failure. Operators must inspect the journal
+            // and deliberately unfreeze only after the active generation is known.
+            crate::metrics::record_rejection(
+                Path::new(crate::metrics::DEFAULT_METRICS_FILE),
+                &err.to_string(),
+            );
+            Err(err)
+        }
+    }
 }
 
 fn ctl_list(args: &[String]) -> Result<()> {
@@ -852,6 +932,7 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
             "nginx-conf",
             "metrics-file",
             "addr",
+            "expected-revision",
         ],
     )?;
     if maybe_help(&flags) {
@@ -873,6 +954,7 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
         &policy_file_of(&flags),
+        flags.get("expected-revision"),
         &ports,
         &binding,
         batch,
@@ -881,6 +963,7 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
         !flags.bool_flag("no-file"),
         &nginx_conf_of(&flags),
         &metrics_file_of(&flags),
+        &freeze_file_of(&flags),
     )
 }
 
@@ -896,6 +979,9 @@ fn ctl_bulk_remove(args: &[String]) -> Result<()> {
             "range",
             "file",
             "batch",
+            "addr",
+            "expected-revision",
+            "metrics-file",
         ],
     )?;
     if maybe_help(&flags) {
@@ -910,6 +996,9 @@ fn ctl_bulk_remove(args: &[String]) -> Result<()> {
         &pin_dir_of(&flags),
         &ports_file_of(&flags),
         &policy_file_of(&flags),
+        flags.get("expected-revision"),
+        &metrics_file_of(&flags),
+        dest_of(&flags)?,
         &ports,
         batch,
         !flags.bool_flag("quiet"),
@@ -938,6 +1027,7 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
             "nginx-conf",
             "metrics-file",
             "addr",
+            "expected-revision",
         ],
     )?;
     if maybe_help(&flags) {
@@ -973,6 +1063,7 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
         &pin,
         &ports_file_of(&flags),
         &policy_file_of(&flags),
+        flags.get("expected-revision"),
         &ports,
         &binding,
         batch,
@@ -981,6 +1072,7 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
         !flags.bool_flag("no-file"),
         &nginx_conf_of(&flags),
         &metrics_file_of(&flags),
+        &freeze_file_of(&flags),
     )
 }
 
@@ -1000,10 +1092,44 @@ fn collect_from_flags(flags: &ParsedFlags) -> Result<Vec<u16>> {
     )
 }
 
+/// Commit a two-plane mutation in a map-first order. The desired file is the
+/// durable desired state, but it is written only after the dataplane update
+/// succeeds. If that durable commit fails, the caller-provided compensation
+/// restores the map snapshot before an error is returned.
+fn map_then_file<T>(
+    mutate_map: impl FnOnce() -> Result<T>,
+    commit_file: impl FnOnce() -> Result<()>,
+    compensate: impl FnOnce() -> Result<()>,
+) -> Result<T> {
+    let result = match mutate_map() {
+        Ok(result) => result,
+        Err(map_err) => {
+            return match compensate() {
+                Ok(()) => Err(map_err)
+                    .context("dataplane mutation failed; partial mutation was rolled back"),
+                Err(rollback_err) => Err(map_err).context(format!(
+                    "dataplane mutation failed and rollback failed: {rollback_err:#}"
+                )),
+            };
+        }
+    };
+    if let Err(file_err) = commit_file() {
+        return match compensate() {
+            Ok(()) => Err(file_err)
+                .context("desired file commit failed; dataplane mutation was rolled back"),
+            Err(rollback_err) => Err(file_err).context(format!(
+                "desired file commit failed and dataplane rollback failed: {rollback_err:#}"
+            )),
+        };
+    }
+    Ok(result)
+}
+
 pub(crate) fn apply_add(
     pin_dir: &Path,
     ports_file: &Path,
     policy_file: &Path,
+    expected_revision: Option<&str>,
     ports: &[u16],
     binding: &PortBinding,
     batch: usize,
@@ -1012,8 +1138,19 @@ pub(crate) fn apply_add(
     sync_file: bool,
     nginx_conf: &Path,
     metrics_file: &Path,
+    freeze_file: &Path,
 ) -> Result<()> {
     let mut desired = desired_or_empty(ports_file, policy_file, pin_dir)?;
+    if let Some(expected) = expected_revision {
+        let actual = desired::revision(&desired);
+        if expected != actual {
+            let err = anyhow::anyhow!(
+                "stale desired revision: expected={expected} actual={actual}; refresh status and retry"
+            );
+            crate::metrics::record_rejection(metrics_file, &err.to_string());
+            return Err(err);
+        }
+    }
     let real = real_ports(nginx_conf)?;
     if let Err(err) = fail_on_overlap(&real, &desired, &CurrentPorts::new(), ports) {
         crate::metrics::record_rejection(metrics_file, &err.to_string());
@@ -1024,6 +1161,14 @@ pub(crate) fn apply_add(
     }
     let policy = effective_policy(policy_file, pin_dir)?;
     if let Err(err) = crate::policy::validate(&desired, &policy) {
+        crate::metrics::record_rejection(metrics_file, &err.to_string());
+        return Err(err);
+    }
+    if let Err(err) = crate::policy::validate_pressure_entries(desired.len(), &policy) {
+        // Preserve recovery headroom and make the stop state durable. Remove/
+        // reconcile paths remain available to drain entries; new adds fail.
+        crate::freeze::set_frozen(freeze_file)
+            .with_context(|| format!("set pressure freeze {}", freeze_file.display()))?;
         crate::metrics::record_rejection(metrics_file, &err.to_string());
         return Err(err);
     }
@@ -1039,23 +1184,38 @@ pub(crate) fn apply_add(
         crate::metrics::record_rejection(metrics_file, &err.to_string());
         return Err(err);
     }
-    if sync_file {
-        desired::write(ports_file, &desired)?;
-    }
     let mut stderr = io::stderr();
     let mut prog: Option<&mut dyn Write> = if progress { Some(&mut stderr) } else { None };
     let keys: Vec<PortKey> = ports
         .iter()
         .map(|p| PortKey::new(*p, binding.dest))
         .collect();
-    let res = bulk_put_keys(
-        &m,
-        &keys,
-        binding.slot,
-        shards_of(&m),
-        batch,
-        prog.as_deref_mut(),
-    )?;
+    let snapshot = snapshot_keys(&m, &keys)?;
+    let res = match map_then_file(
+        || {
+            bulk_put_keys(
+                &m,
+                &keys,
+                binding.slot,
+                shards_of(&m),
+                batch,
+                prog.as_deref_mut(),
+            )
+        },
+        || {
+            if sync_file {
+                desired::write(ports_file, &desired)?;
+            }
+            Ok(())
+        },
+        || restore_snapshot(&m, &snapshot),
+    ) {
+        Ok(res) => res,
+        Err(err) => {
+            crate::metrics::record_rejection(metrics_file, &err.to_string());
+            return Err(err);
+        }
+    };
     if summary {
         println!(
             "{}",
@@ -1077,32 +1237,75 @@ pub(crate) fn apply_add(
     Ok(())
 }
 
+/// Remove only the requested `(family, address, port)` keys from desired
+/// state. This is deliberately not port-only: identical ports on different
+/// VIPs are independent bindings.
+pub(crate) fn remove_desired_ports(desired: &mut desired::DesiredPorts, ports: &[u16], dest: Dest) {
+    for port in ports {
+        desired.remove(&PortKey::new(*port, dest));
+    }
+}
+
 pub(crate) fn apply_remove(
     pin_dir: &Path,
     ports_file: &Path,
     policy_file: &Path,
+    expected_revision: Option<&str>,
+    metrics_file: &Path,
+    dest: Dest,
     ports: &[u16],
     batch: usize,
     progress: bool,
     summary: bool,
     sync_file: bool,
 ) -> Result<()> {
+    // Validate the revision before mutating either plane. The map opens only
+    // after stale clients are rejected; the desired file writes only after the
+    // pinned dataplane is confirmed reachable.
+    let mut desired_for_sync = if sync_file || expected_revision.is_some() {
+        let policy = effective_policy(policy_file, pin_dir)?;
+        Some(desired::load_with_effective_policy(ports_file, &policy)?)
+    } else {
+        None
+    };
+    if let Some(expected) = expected_revision {
+        let actual = desired::revision(desired_for_sync.as_ref().expect("loaded for revision"));
+        if expected != actual {
+            let err = anyhow::anyhow!(
+                "stale desired revision: expected={expected} actual={actual}; refresh status and retry"
+            );
+            crate::metrics::record_rejection(metrics_file, &err.to_string());
+            return Err(err);
+        }
+    }
     let m = load_pinned_open_ports(pin_dir)?;
     if sync_file {
-        let policy = effective_policy(policy_file, pin_dir)?;
-        let mut desired = desired::load_with_effective_policy(ports_file, &policy)?;
-        for port in ports {
-            desired.remove(&PortKey::new(*port, Dest::AnyV4));
-        }
-        desired::write(ports_file, &desired)?;
+        let desired = desired_for_sync.as_mut().expect("loaded for sync");
+        remove_desired_ports(desired, ports, dest);
     }
     let mut stderr = io::stderr();
     let mut prog: Option<&mut dyn Write> = if progress { Some(&mut stderr) } else { None };
-    let keys: Vec<PortKey> = ports
-        .iter()
-        .map(|p| PortKey::new(*p, Dest::AnyV4))
-        .collect();
-    let res = bulk_delete_keys(&m, &keys, batch, prog.as_deref_mut())?;
+    let keys: Vec<PortKey> = ports.iter().map(|p| PortKey::new(*p, dest)).collect();
+    let snapshot = snapshot_keys(&m, &keys)?;
+    let res = match map_then_file(
+        || bulk_delete_keys(&m, &keys, batch, prog.as_deref_mut()),
+        || {
+            if sync_file {
+                desired::write(
+                    ports_file,
+                    desired_for_sync.as_ref().expect("loaded for sync"),
+                )?;
+            }
+            Ok(())
+        },
+        || restore_snapshot(&m, &snapshot),
+    ) {
+        Ok(res) => res,
+        Err(err) => {
+            crate::metrics::record_rejection(metrics_file, &err.to_string());
+            return Err(err);
+        }
+    };
     if summary {
         println!("{}", format_remove_summary(&res));
         return Ok(());
@@ -1158,6 +1361,9 @@ pub fn close_pinned_ports(pin_dir: &Path, ports_file: &Path, ports: &[u16]) -> R
         pin_dir,
         ports_file,
         &crate::policy::default_path(ports_file),
+        None,
+        Path::new(crate::metrics::DEFAULT_METRICS_FILE),
+        Dest::AnyV4,
         ports,
         DEFAULT_BULK_BATCH,
         false,
@@ -1183,6 +1389,7 @@ pub fn open_pinned_ports(
             pin_dir,
             ports_file,
             policy_file,
+            None,
             http_ports,
             &PortBinding {
                 slot: REDIR_PRIMARY as u8,
@@ -1194,6 +1401,7 @@ pub fn open_pinned_ports(
             true,
             Path::new("openresty/nginx.conf"),
             Path::new(crate::metrics::DEFAULT_METRICS_FILE),
+            Path::new(crate::freeze::DEFAULT_FREEZE_FILE),
         )?;
     }
     if !tls_ports.is_empty() {
@@ -1201,6 +1409,7 @@ pub fn open_pinned_ports(
             pin_dir,
             ports_file,
             policy_file,
+            None,
             tls_ports,
             &PortBinding {
                 slot: REDIR_TLS as u8,
@@ -1212,6 +1421,7 @@ pub fn open_pinned_ports(
             true,
             Path::new("openresty/nginx.conf"),
             Path::new(crate::metrics::DEFAULT_METRICS_FILE),
+            Path::new(crate::freeze::DEFAULT_FREEZE_FILE),
         )?;
     }
     Ok(())
@@ -1243,6 +1453,7 @@ pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
             "nginx-conf",
             "metrics-file",
             "addr",
+            "expected-revision",
         ],
     )?;
     if maybe_help(&flags) {
@@ -1554,7 +1765,7 @@ mod tests {
 
     #[test]
     fn overlap_conflict_fail_closed_on_add() {
-        let (_dir, ports, policy, nginx, pin, metrics) = fixture();
+        let (dir, ports, policy, nginx, pin, metrics) = fixture();
         fs::write(&ports, "# desired open_ports\n18082 acme www\n").unwrap();
         fs::write(&nginx, "listen 18081;\n").unwrap();
         let before = fs::read(&ports).unwrap();
@@ -1563,6 +1774,7 @@ mod tests {
             &pin,
             &ports,
             &policy,
+            None,
             &[18081],
             &binding,
             16,
@@ -1571,6 +1783,7 @@ mod tests {
             true,
             &nginx,
             &metrics,
+            &dir.join("freeze"),
         )
         .unwrap_err();
         assert!(err.to_string().contains("overlap"));
@@ -1699,6 +1912,133 @@ mod tests {
         assert_eq!(fs::read(&nginx).unwrap(), before);
     }
 
+    // SDD-003 / T-043: a close on one exact VIP must not delete the same
+    // numeric port on another VIP.
+    #[test]
+    fn exact_vip_remove_preserves_same_port_on_other_vip() {
+        let binding = PortBinding::new(REDIR_PRIMARY as u8, "acme", "www");
+        let vip1 = Dest::parse("127.0.0.2").unwrap();
+        let vip2 = Dest::parse("127.0.0.3").unwrap();
+        let mut desired = desired::DesiredPorts::new();
+        desired.insert(PortKey::new(19104, vip1), binding.clone());
+        desired.insert(PortKey::new(19104, vip2), binding);
+        remove_desired_ports(&mut desired, &[19104], vip1);
+        assert!(!desired.contains_key(&PortKey::new(19104, vip1)));
+        assert!(desired.contains_key(&PortKey::new(19104, vip2)));
+    }
+
+    // SDD-003 / T-044: stale close is as dangerous as stale add. It must be
+    // rejected before deleting any exact-VIP mapping or changing ports.conf.
+    #[test]
+    fn stale_expected_revision_rejects_remove_before_map_or_file_mutation() {
+        let (dir, ports_file, policy_file, nginx, pin, metrics) = fixture();
+        fs::write(&nginx, "").unwrap();
+        fs::write(
+            &ports_file,
+            "# desired open_ports\n18081 acme www addr=127.0.0.2\n",
+        )
+        .unwrap();
+        let before = fs::read(&ports_file).unwrap();
+        let err = apply_remove(
+            &pin,
+            &ports_file,
+            &policy_file,
+            Some("0000000000000000"),
+            &metrics,
+            Dest::parse("127.0.0.2").unwrap(),
+            &[18081],
+            16,
+            false,
+            false,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("stale desired revision"), "{err}");
+        assert_eq!(fs::read(&ports_file).unwrap(), before);
+        assert_eq!(
+            crate::metrics::read_last_rejection(&metrics).as_deref(),
+            Some("revision")
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    // SDD-003 / T-040: stale writers are rejected before any pinned map or
+    // desired-file side effect, and the DFX reason is bounded to `revision`.
+    #[test]
+    fn stale_expected_revision_rejects_before_map_or_file_mutation() {
+        let (dir, ports_file, policy_file, nginx, pin, metrics) = fixture();
+        fs::write(&nginx, "").unwrap();
+        let binding = PortBinding::new(REDIR_PRIMARY as u8, "acme", "www");
+        let err = apply_add(
+            &pin,
+            &ports_file,
+            &policy_file,
+            Some("0000000000000000"),
+            &[18081],
+            &binding,
+            16,
+            false,
+            false,
+            true,
+            &nginx,
+            &metrics,
+            &dir.join("freeze"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("stale desired revision"), "{err}");
+        assert!(!ports_file.exists());
+        assert_eq!(crate::metrics::read(&metrics), 1);
+        assert_eq!(
+            crate::metrics::read_last_rejection(&metrics).as_deref(),
+            Some("revision")
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    // SDD-003 / T-042: pressure rejection happens before opening the pinned
+    // map or replacing ports.conf, and leaves a durable freeze for operators.
+    #[test]
+    fn pressure_threshold_freezes_before_any_map_or_file_mutation() {
+        let (dir, ports_file, policy_file, nginx, pin, metrics) = fixture();
+        fs::write(
+            &policy_file,
+            "allow_privileged=\nmax_ports_per_tenant=131072\nmax_ports_per_machine=131072\npressure_freeze_pct=1\n",
+        )
+        .unwrap();
+        fs::write(&nginx, "").unwrap();
+        let freeze = dir.join("pressure-freeze");
+        let ports: Vec<u16> = (20_000..=21_311).collect(); // first integer >= 1% of 131072
+        let binding = PortBinding::new(REDIR_PRIMARY as u8, "acme", "www");
+        let err = apply_add(
+            &pin,
+            &ports_file,
+            &policy_file,
+            None,
+            &ports,
+            &binding,
+            128,
+            false,
+            false,
+            true,
+            &nginx,
+            &metrics,
+            &freeze,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("pressure freeze threshold"), "{err}");
+        assert!(freeze.exists());
+        assert!(!ports_file.exists());
+        assert_eq!(crate::metrics::read(&metrics), 1);
+        assert_eq!(
+            crate::metrics::read_last_rejection(&metrics).as_deref(),
+            Some("capacity")
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn virtual_status_distinguishes_real_and_desired() {
         let (dir, ports, policy, nginx, pin, metrics) = fixture();
@@ -1723,7 +2063,11 @@ mod tests {
             .filter(|p| !real.contains(p))
             .collect();
         assert_eq!(virtuals, vec![18081]);
-        assert_eq!(v["port_count"], 1);
+        assert_eq!(v["desired_count"], 1);
+        let revision = v["desired_revision"]
+            .as_str()
+            .expect("desired revision string");
+        assert_eq!(revision.len(), 16);
         assert_eq!(v["conflict_count"], 0);
         assert_eq!(v["drift"]["put"], 1);
         assert_eq!(v["drift"]["delete"], 0);
@@ -1826,5 +2170,39 @@ mod tests {
         assert!(desired.contains("19002 acme www"));
         assert!(!desired.lines().any(|l| l.starts_with("80 ")));
         assert_eq!(fs::read(&nginx).unwrap(), before);
+    }
+
+    #[test]
+    fn map_then_file_compensates_a_partial_map_error() {
+        let calls = std::cell::Cell::new(0u8);
+        let err = map_then_file::<()>(
+            || Err(anyhow::anyhow!("simulated partial batch failure")),
+            || Ok(()),
+            || {
+                calls.set(calls.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(calls.get(), 1);
+        assert!(err.contains("partial mutation was rolled back"));
+    }
+
+    #[test]
+    fn map_then_file_compensates_when_desired_commit_fails() {
+        let calls = std::cell::Cell::new(0u8);
+        let err = map_then_file(
+            || Ok(7u8),
+            || Err(anyhow::anyhow!("simulated desired write failure")),
+            || {
+                calls.set(calls.get() + 1);
+                Ok(())
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(calls.get(), 1);
+        assert!(err.contains("dataplane mutation was rolled back"));
     }
 }

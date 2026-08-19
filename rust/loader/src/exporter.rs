@@ -20,8 +20,11 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use libbpf_rs::{MapCore, MapHandle};
 
+use crate::freeze;
 use crate::metrics;
 use crate::pin;
+use crate::reservation;
+use crate::upgrade;
 
 pub struct Handle {
     shutdown: Arc<AtomicBool>,
@@ -105,7 +108,15 @@ fn serve(mut stream: TcpStream, pin_dir: &Path) -> Result<()> {
             });
             write_response(&mut stream, "200 OK", "text/plain; version=0.0.4", &body)
         }
-        "/healthz" => write_response(&mut stream, "200 OK", "text/plain", "ok\n"),
+        "/healthz" => {
+            let (ready, reason) = healthz(pin_dir);
+            let status = if ready {
+                "200 OK"
+            } else {
+                "503 Service Unavailable"
+            };
+            write_response(&mut stream, status, "text/plain", &format!("{reason}\n"))
+        }
         _ => write_response(&mut stream, "404 Not Found", "text/plain", "not found\n"),
     }
 }
@@ -186,9 +197,72 @@ fn render(pin_dir: &Path) -> Result<String> {
         ));
     }
 
-    Ok(metrics::prometheus_body(
-        &stats, apply_fail, last_apply, &extra,
-    ))
+    let mut body = metrics::prometheus_body(&stats, apply_fail, last_apply, &extra);
+    body.push_str(&control_plane_prometheus(pin_dir));
+    Ok(body)
+}
+
+/// Bounded-control-plane telemetry. These names deliberately carry only a
+/// fixed state/reason label set; endpoint addresses, revisions, tenant IDs and
+/// journal error text remain in the authenticated status/audit paths.
+fn control_plane_prometheus(pin_dir: &Path) -> String {
+    let frozen = freeze::is_frozen(Path::new(freeze::DEFAULT_FREEZE_FILE));
+    let summary = reservation::summary(pin_dir);
+    let rejection = metrics::read_last_rejection(Path::new(metrics::DEFAULT_METRICS_FILE))
+        .unwrap_or_else(|| "none".into());
+    let phase = match upgrade::read_journal(pin_dir) {
+        Ok(Some(journal)) => format!("{:?}", journal.phase).to_ascii_lowercase(),
+        Ok(None) => "none".into(),
+        Err(_) => "invalid".into(),
+    };
+    let in_progress = matches!(
+        phase.as_str(),
+        "prepared" | "activating" | "healthy" | "rollingback" | "rolling_back"
+    );
+    format!(
+        "# HELP waf_sklookup_control_plane_frozen 1 when mutations are stopped by a safety freeze\n\
+         # TYPE waf_sklookup_control_plane_frozen gauge\n\
+         waf_sklookup_control_plane_frozen {}\n\
+         # HELP waf_sklookup_runtime_reservation_state Runtime reservation sidecar state (fixed vocabulary)\n\
+         # TYPE waf_sklookup_runtime_reservation_state gauge\n\
+         waf_sklookup_runtime_reservation_state{{state=\"{}\"}} 1\n\
+         # HELP waf_sklookup_runtime_reservation_endpoints Number of runtime-protected endpoints\n\
+         # TYPE waf_sklookup_runtime_reservation_endpoints gauge\n\
+         waf_sklookup_runtime_reservation_endpoints {}\n\
+         # HELP waf_sklookup_upgrade_phase Current persisted upgrade phase (fixed vocabulary)\n\
+         # TYPE waf_sklookup_upgrade_phase gauge\n\
+         waf_sklookup_upgrade_phase{{phase=\"{}\"}} 1\n\
+         # HELP waf_sklookup_upgrade_in_progress 1 while an upgrade journal is non-terminal\n\
+         # TYPE waf_sklookup_upgrade_in_progress gauge\n\
+         waf_sklookup_upgrade_in_progress {}\n\
+         # HELP waf_sklookup_last_rejection_reason Last bounded control-plane rejection code\n\
+         # TYPE waf_sklookup_last_rejection_reason gauge\n\
+         waf_sklookup_last_rejection_reason{{reason=\"{}\"}} 1\n",
+        if frozen { 1 } else { 0 },
+        summary.state,
+        summary.endpoint_count,
+        phase,
+        if in_progress { 1 } else { 0 },
+        rejection,
+    )
+}
+
+fn healthz(pin_dir: &Path) -> (bool, &'static str) {
+    if MapHandle::from_pinned_path(pin::stats_path(pin_dir)).is_err() {
+        return (false, "dataplane_unreadable");
+    }
+    if freeze::is_frozen(Path::new(freeze::DEFAULT_FREEZE_FILE)) {
+        return (false, "frozen");
+    }
+    let reservation = reservation::summary(pin_dir);
+    if reservation.state != "active" {
+        return (false, "reservation_not_active");
+    }
+    match upgrade::read_journal(pin_dir) {
+        Ok(Some(journal)) if !journal.phase.terminal() => (false, "upgrade_in_progress"),
+        Ok(_) => (true, "ready"),
+        Err(_) => (false, "upgrade_journal_invalid"),
+    }
 }
 
 fn redir_occupancy(pin_dir: &Path) -> Result<f64> {
