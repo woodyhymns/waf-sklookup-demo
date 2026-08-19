@@ -151,8 +151,6 @@ fn ctl_import_listens(args: &[String]) -> Result<()> {
     if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
     let binding = import_binding(&flags)?;
     let conf = flags.get("from").map(PathBuf::from).unwrap_or_else(|| nginx_conf_of(&flags));
-    let bytes = fs::read(&conf).with_context(|| format!("read nginx config {}", conf.display()))?;
-    let text = std::str::from_utf8(&bytes).context("nginx config is not UTF-8")?;
     let policy_file = policy_file_of(&flags);
     let policy = crate::policy::load(&policy_file)?;
     let extra_skip = if let Some(raw) = flags.get("skip") {
@@ -160,7 +158,7 @@ fn ctl_import_listens(args: &[String]) -> Result<()> {
     } else {
         crate::nginx_listen::inner_real_ports()
     };
-    let listens = crate::nginx_listen::parse_listen_ports(text).into_iter().collect();
+    let listens = crate::nginx_listen::parse_listen_ports_from_conf(&conf)?.into_iter().collect();
     let (ports, skipped_pairs) = crate::nginx_listen::importable_ports(&listens, &policy, &extra_skip);
     let skipped: Vec<String> = skipped_pairs.iter().map(|(p, r)| format!("{p}={r}")).collect();
     reject_frozen(&flags, "import-listen", &binding.tenant, &binding.site, &ports)?;
@@ -209,18 +207,20 @@ fn ctl_retire_conf_listen(args: &[String]) -> Result<()> {
     if flags.bool_flag("apply") {
         bail!("retire-conf-listen --apply is not implemented; conf rewrite is dry-run-only");
     }
-    let text = fs::read_to_string(nginx_conf_of(&flags))?;
+    let conf = nginx_conf_of(&flags);
     let wanted: BTreeSet<u16> = if flags.args.is_empty() {
-        crate::nginx_listen::importable_listen_ports(&text).into_iter().collect()
+        crate::nginx_listen::importable_listen_ports_from_conf(&conf)?.into_iter().collect()
     } else {
         let mut set = BTreeSet::new();
         for spec in &flags.args { set.extend(crate::ports::parse_port_list_flexible(spec)?); }
         set
     };
     let mut found = false;
-    for line in text.lines() {
-        let ports = crate::nginx_listen::parse_listen_ports(line);
-        if ports.iter().any(|p| wanted.contains(p)) { println!("{line}"); found = true; }
+    for (_, text) in crate::nginx_listen::read_expanded_files(&conf)? {
+        for line in text.lines() {
+            let ports = crate::nginx_listen::parse_listen_ports(line);
+            if ports.iter().any(|p| wanted.contains(p)) { println!("{line}"); found = true; }
+        }
     }
     if !found { println!("no nginx listen line found for requested ports"); }
     println!("migrate --drop-listen is dry-run only; edit nginx manually then reload");
@@ -307,8 +307,7 @@ fn metrics_file_of(flags: &ParsedFlags) -> PathBuf {
 
 fn real_ports(path: &Path) -> Result<BTreeSet<u16>> {
     if !path.exists() { return Ok(crate::nginx_listen::inner_real_ports()); }
-    let text = fs::read_to_string(path).with_context(|| format!("read nginx config {}", path.display()))?;
-    Ok(crate::nginx_listen::real_listen_ports(&text))
+    crate::nginx_listen::real_listen_ports_from_conf(path)
 }
 
 fn overlap(real: &BTreeSet<u16>, desired: &DesiredPorts, map: &HashMap<u16, u8>, adding: &[u16]) -> Vec<u16> {
@@ -1057,5 +1056,52 @@ mod tests {
         assert!(desired.contains("19002 acme www"));
         assert!(!desired.lines().any(|l| l.starts_with("80 ")));
         assert_eq!(fs::read(&nginx).unwrap(), before);
+    }
+
+    #[test]
+    fn issue30_product_fixture_imports_includes_and_skips_reserved() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/issue-30-product-nginx");
+        let nginx = root.join("nginx.conf");
+        let dir = std::env::temp_dir().join(format!("waf-issue30-ctl-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let ports = dir.join("ports.conf");
+        let policy = dir.join("policy.conf");
+        fs::write(&policy, "allow_privileged=\nmax_ports_per_tenant=32\nmax_ports_per_machine=128\n").unwrap();
+        let before = fs::read(&nginx).unwrap();
+
+        let dry = strings(&[
+            "-dry-run", "-nginx-conf", nginx.to_str().unwrap(),
+            "-ports-file", ports.to_str().unwrap(), "-policy-file", policy.to_str().unwrap(),
+            "-tenant", "acme", "-site", "www",
+        ]);
+        ctl_import_listens(&dry).unwrap();
+        assert!(!ports.exists());
+        assert_eq!(fs::read(&nginx).unwrap(), before);
+
+        let import = strings(&[
+            "-nginx-conf", nginx.to_str().unwrap(),
+            "-ports-file", ports.to_str().unwrap(), "-policy-file", policy.to_str().unwrap(),
+            "-tenant", "acme", "-site", "www",
+        ]);
+        ctl_import_listens(&import).unwrap();
+        let desired = fs::read_to_string(&ports).unwrap();
+        for port in [18081, 18082, 19001, 19002] {
+            assert!(desired.contains(&format!("{port} acme www")), "missing {port} in {desired}");
+        }
+        for port in [80, 443, 8080, 8443] {
+            assert!(!desired.lines().any(|l| l.starts_with(&format!("{port} "))), "reserved {port} imported");
+        }
+
+        let overlap = strings(&["-nginx-conf", nginx.to_str().unwrap(), "-ports-file", ports.to_str().unwrap(), "-policy-file", policy.to_str().unwrap()]);
+        fs::write(&ports, "# desired open_ports\n").unwrap();
+        ctl_check_overlap(&overlap).unwrap();
+
+        let err = ctl_retire_conf_listen(&strings(&["--apply", "-nginx-conf", nginx.to_str().unwrap(), "19001"])).unwrap_err().to_string();
+        assert!(err.contains("dry-run"));
+        let err = ctl_migrate(&strings(&["--drop-listen", "--apply", "-nginx-conf", nginx.to_str().unwrap(), "19001"])).unwrap_err().to_string();
+        assert!(err.contains("dry-run"));
+        assert_eq!(fs::read(&nginx).unwrap(), before);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
