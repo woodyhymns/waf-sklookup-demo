@@ -16,6 +16,34 @@ use libbpf_rs::{MapCore, MapFlags};
 pub const DEFAULT_METRICS_FILE: &str = "/run/waf-sklookup/apply_fail_total";
 pub const DEFAULT_APPLY_STAMP: &str = "/run/waf-sklookup/last-apply-central";
 
+/// Immutable capacity view derived from one map-entry snapshot. Keeping these
+/// fields together prevents operators from seeing an entries value from one
+/// scrape and a pressure ratio calculated against another capacity contract.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CapacitySnapshot {
+    pub entries: u64,
+    pub capacity: u64,
+    pub headroom: u64,
+    pub pressure_ratio: f64,
+}
+
+impl CapacitySnapshot {
+    /// Returns None for an impossible map state. Callers must expose an
+    /// explicit exporter failure rather than underflowing headroom or claiming
+    /// a plausible pressure ratio after a corrupt/incompatible read.
+    pub fn new(entries: u64, capacity: u64) -> Option<Self> {
+        if capacity == 0 || entries > capacity {
+            return None;
+        }
+        Some(Self {
+            entries,
+            capacity,
+            headroom: capacity - entries,
+            pressure_ratio: entries as f64 / capacity as f64,
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Control-plane counters (unchanged file contract: still cheap to cat during
 // an incident, and existing runbooks keep working).
@@ -381,6 +409,20 @@ mod tests {
         // port_miss / pass_non_tcp are normal fall-through, not faults.
         assert_eq!(stats.fault_ratio(), Some(0.1));
         assert_eq!(DataplaneStats::default().fault_ratio(), None);
+    }
+
+    // SDD-001 / T-005: map pressure is an operational contract, not an
+    // ad-hoc division in the HTTP exporter. The snapshot must preserve the
+    // same entries/capacity pair for every derived value.
+    #[test]
+    fn capacity_snapshot_reports_consistent_pressure_and_headroom() {
+        let c = CapacitySnapshot::new(60_000, 131_072).unwrap();
+        assert_eq!(c.entries, 60_000);
+        assert_eq!(c.capacity, 131_072);
+        assert_eq!(c.headroom, 71_072);
+        assert!((c.pressure_ratio - 0.457763671875).abs() < 1e-12);
+        assert!(CapacitySnapshot::new(131_073, 131_072).is_none());
+        assert!(CapacitySnapshot::new(1, 0).is_none());
     }
 
     #[test]

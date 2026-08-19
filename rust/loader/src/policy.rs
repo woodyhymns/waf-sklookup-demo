@@ -14,6 +14,10 @@ const DEFAULT_DENY: &[u16] = &[22, 25, 53, 3306, 6379];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     pub deny: BTreeSet<u16>,
+    /// Management/fixed-listener ports that dynamic WAF bindings may never
+    /// claim. Unlike `deny`, this is an operational isolation rule and its
+    /// error tells operators to move/declare the endpoint or use an exact VIP.
+    pub reserve: BTreeSet<u16>,
     pub allow_privileged: BTreeSet<u16>,
     pub max_ports_per_tenant: usize,
     pub max_ports_per_machine: usize,
@@ -23,6 +27,7 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             deny: DEFAULT_DENY.iter().copied().collect(),
+            reserve: BTreeSet::new(),
             allow_privileged: BTreeSet::new(),
             max_ports_per_tenant: 32,
             max_ports_per_machine: 128,
@@ -65,6 +70,12 @@ fn parse(raw: &str) -> Result<Policy> {
                 out.deny.extend(
                     parse_port_list_flexible(value.trim())
                         .with_context(|| format!("line {line_no}: deny"))?,
+                );
+            }
+            "reserve" => {
+                out.reserve.extend(
+                    parse_port_list_flexible(value.trim())
+                        .with_context(|| format!("line {line_no}: reserve"))?,
                 );
             }
             "allow_privileged" => {
@@ -117,6 +128,12 @@ pub fn validate_binding(port: u16, binding: &PortBinding, policy: &Policy) -> Re
     }
     if policy.deny.contains(&port) {
         bail!("port {port} is denied by policy");
+    }
+    if policy.reserve.contains(&port) {
+        bail!(
+            "port {port} is reserved by policy (management/fixed listener); \
+             use a distinct ingress VIP or update the reservation policy"
+        );
     }
     if port <= 1023 && !policy.allow_privileged.contains(&port) {
         bail!("privileged port {port} is not in allow_privileged");
@@ -264,5 +281,50 @@ mod tests {
     #[test]
     fn default_policy_fits_the_dataplane() {
         validate_capacity(&Policy::default()).unwrap();
+    }
+
+    // SDD-001 / T-001: management-port reservations are a policy primitive,
+    // not an operator convention. Multiple lines compose so layered policy
+    // files can reserve exporter, ctl, and host-agent ports independently.
+    #[test]
+    fn reserve_lines_merge_and_reject_before_mutation() {
+        let p = parse("reserve=9101,17171\nreserve=19104\n").unwrap();
+        assert!(p.reserve.contains(&9101));
+        assert!(p.reserve.contains(&17171));
+        assert!(p.reserve.contains(&19104));
+        let err = validate_binding(19104, &binding("acme"), &p)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("reserved"), "{err}");
+    }
+
+    // SDD-001 / T-001: deny and reserve remain distinct operator messages.
+    // A reserved metrics/ctl port is not a security deny; remediation is to
+    // move/declare the management endpoint or use a distinct ingress VIP.
+    #[test]
+    fn reserve_is_distinct_from_deny() {
+        let p = parse("reserve=9101\n").unwrap();
+        assert!(validate_binding(9101, &binding("acme"), &p)
+            .unwrap_err()
+            .to_string()
+            .contains("reserved"));
+        assert!(validate_binding(22, &binding("acme"), &p)
+            .unwrap_err()
+            .to_string()
+            .contains("denied"));
+    }
+
+    // SDD-001 / T-002: the checked-in deployment policy must reserve the
+    // default internal and metrics endpoints, so an operator cannot turn the
+    // default control plane into a wildcard dynamic-port binding by accident.
+    #[test]
+    fn repository_policy_reserves_default_management_endpoints() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("policy.conf");
+        let policy = load(&path).unwrap();
+        for port in [8080, 8443, 9101] {
+            assert!(policy.reserve.contains(&port), "missing reserve={port}");
+        }
     }
 }

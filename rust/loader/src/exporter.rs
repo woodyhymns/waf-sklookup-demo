@@ -144,12 +144,39 @@ fn render(pin_dir: &Path) -> Result<String> {
         occupancy,
     ));
 
-    let entries = open_ports_entries(pin_dir).unwrap_or(-1.0);
-    extra.push((
-        "open_ports_entries",
-        "Number of steered destinations currently programmed",
-        entries,
-    ));
+    match open_ports_entries(pin_dir) {
+        Ok(entries) => {
+            if let Some(capacity) = capacity_extras(entries) {
+                extra.extend(capacity);
+            } else {
+                // A map count above its declared capacity is impossible for a
+                // healthy BPF map. Surface an explicit scrape anomaly instead
+                // of inventing a negative headroom or plausible ratio.
+                extra.push((
+                    "open_ports_entries",
+                    "Number of steered destinations currently programmed",
+                    entries as f64,
+                ));
+                extra.push((
+                    "open_ports_capacity_snapshot_valid",
+                    "1 when open_ports capacity metrics came from a valid snapshot",
+                    0.0,
+                ));
+            }
+        }
+        Err(_) => {
+            extra.push((
+                "open_ports_entries",
+                "Number of steered destinations currently programmed (-1 means unreadable)",
+                -1.0,
+            ));
+            extra.push((
+                "open_ports_capacity_snapshot_valid",
+                "1 when open_ports capacity metrics came from a valid snapshot",
+                0.0,
+            ));
+        }
+    }
 
     if let Some(ratio) = stats.fault_ratio() {
         extra.push((
@@ -177,14 +204,60 @@ fn redir_occupancy(pin_dir: &Path) -> Result<f64> {
     Ok(f64::from(populated))
 }
 
-fn open_ports_entries(pin_dir: &Path) -> Result<f64> {
+/// One capacity snapshot becomes four related gauges. No port, tenant, or
+/// address labels are used: map pressure is node-scoped and must stay bounded
+/// under a customer port flood.
+fn capacity_extras(entries: u64) -> Option<Vec<(&'static str, &'static str, f64)>> {
+    let c = metrics::CapacitySnapshot::new(entries, pin::OPEN_PORTS_MAX_ENTRIES as u64)?;
+    Some(vec![
+        (
+            "open_ports_entries",
+            "Number of steered destinations currently programmed",
+            c.entries as f64,
+        ),
+        (
+            "open_ports_max_entries",
+            "Configured maximum number of open_ports BPF map entries",
+            c.capacity as f64,
+        ),
+        (
+            "open_ports_pressure_ratio",
+            "Share of open_ports map capacity currently programmed",
+            c.pressure_ratio,
+        ),
+        (
+            "open_ports_headroom_entries",
+            "Remaining open_ports map capacity before hard admission failure",
+            c.headroom as f64,
+        ),
+    ])
+}
+
+fn open_ports_entries(pin_dir: &Path) -> Result<u64> {
     let map = MapHandle::from_pinned_path(pin::open_ports_path(pin_dir))?;
-    Ok(map.keys().count() as f64)
+    Ok(map.keys().count() as u64)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // SDD-001 / T-005: all capacity values must derive from one entries
+    // snapshot and use stable, low-cardinality Prometheus names.
+    #[test]
+    fn capacity_extras_publish_entries_max_pressure_and_headroom() {
+        let extra = capacity_extras(60_000).unwrap();
+        assert_eq!(extra.len(), 4);
+        assert_eq!(extra[0].0, "open_ports_entries");
+        assert_eq!(extra[0].2, 60_000.0);
+        assert_eq!(extra[1].0, "open_ports_max_entries");
+        assert_eq!(extra[1].2, 131_072.0);
+        assert_eq!(extra[2].0, "open_ports_pressure_ratio");
+        assert!((extra[2].2 - 0.457763671875).abs() < 1e-12);
+        assert_eq!(extra[3].0, "open_ports_headroom_entries");
+        assert_eq!(extra[3].2, 71_072.0);
+        assert!(capacity_extras(131_073).is_none());
+    }
 
     #[test]
     fn unknown_paths_get_404_and_metrics_gets_a_body() {

@@ -19,7 +19,7 @@ LOADER_BIN="${LOADER_BIN:-./rust/loader/target/release/waf-sklookup-loader}"
 TENANT="${M3_TENANT:-m3}"
 SITE="${M3_SITE:-capacity}"
 # Keep product-denied and default internal listeners out of generated ranges.
-BASE_SKIP="${M3_BASE_SKIP:-22,25,53,3306,6379,8080,8443}"
+BASE_SKIP="${M3_BASE_SKIP:-22,25,53,3306,6379,8080,8443,9101}"
 M3_MGMT_PORTS="${M3_MGMT_PORTS:-}"
 
 if (( COUNT > 10000 )) && [[ "${M3_FULL_LADDER:-0}" != "1" ]]; then

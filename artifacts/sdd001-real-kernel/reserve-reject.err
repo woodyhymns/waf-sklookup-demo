@@ -1,0 +1,2 @@
+2026/08/19 01:22:35 audit uid=0 gid=0 pid=11314 op=add tenant=acme site=www ports=9101,-tenant,acme,-site,www,-pin-dir,/tmp/waf-sdd001/bpffs/pin,-ports-file,/tmp/waf-sdd001/work/ports.conf,-policy-file,/tmp/waf-sdd001/work/policy.conf ok=false
+2026/08/19 01:22:35 port 9101 is reserved by policy (management/fixed listener); use a distinct ingress VIP or update the reservation policy

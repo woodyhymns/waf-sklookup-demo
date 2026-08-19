@@ -92,12 +92,34 @@ pub fn link_path(pin_dir: impl AsRef<Path>) -> PathBuf {
     pin_dir.as_ref().join(LINK_PIN)
 }
 
-pub fn identity_path(pin_dir: impl AsRef<Path>) -> PathBuf {
-    let pin_dir = pin_dir.as_ref();
-    // Unit tests and non-bpffs development paths keep the sidecar beside their
-    // temporary map directory. Production bpffs paths cannot accept regular
-    // files (EPERM), so use a deterministic /run location keyed by pin path.
-    if pin_dir.starts_with("/sys/fs/bpf") {
+/// Linux `BPF_FS_MAGIC` from `include/uapi/linux/magic.h`.
+const BPF_FS_MAGIC: libc::c_long = 0xcafe_4a11;
+
+/// Use the mount type rather than a `/sys/fs/bpf` pathname convention. CI and
+/// production recovery tools regularly use private bpffs mounts below `/run`,
+/// `/tmp`, or an isolated mount namespace; bpffs accepts pinned BPF objects but
+/// rejects a normal JSON identity sidecar with EPERM.
+fn is_bpffs(path: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut probe = path;
+    while !probe.exists() {
+        let Some(parent) = probe.parent() else {
+            return false;
+        };
+        probe = parent;
+    }
+    let Ok(c_path) = CString::new(probe.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut stat = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    let rc = unsafe { libc::statfs(c_path.as_ptr(), stat.as_mut_ptr()) };
+    rc == 0 && unsafe { stat.assume_init().f_type } == BPF_FS_MAGIC
+}
+
+fn identity_path_for_filesystem(pin_dir: &Path, bpffs: bool) -> PathBuf {
+    if bpffs {
         PathBuf::from(IDENTITY_SIDECAR_DIR).join(format!(
             "{}-{}.json",
             pin_dir
@@ -109,6 +131,11 @@ pub fn identity_path(pin_dir: impl AsRef<Path>) -> PathBuf {
     } else {
         pin_dir.join(IDENTITY_FILE)
     }
+}
+
+pub fn identity_path(pin_dir: impl AsRef<Path>) -> PathBuf {
+    let pin_dir = pin_dir.as_ref();
+    identity_path_for_filesystem(pin_dir, is_bpffs(pin_dir))
 }
 
 /// Stable, dependency-free filename discriminator. The pin directory string
@@ -283,7 +310,9 @@ mod tests {
 
     #[test]
     fn bpffs_identity_uses_run_sidecar_not_a_regular_bpffs_file() {
-        let p = identity_path("/sys/fs/bpf/waf-e2e");
+        // Unit tests do not require /sys/fs/bpf to be mounted in the host
+        // sandbox; the real-kernel E2E covers statfs() against an actual mount.
+        let p = identity_path_for_filesystem(Path::new("/sys/fs/bpf/waf-e2e"), true);
         assert!(
             p.starts_with("/run/waf-sklookup/identities"),
             "{}",
@@ -294,6 +323,20 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .contains("waf-e2e-"));
+    }
+
+    // Regression: a private bpffs mount may be under /tmp or another runtime
+    // path. Prefix-only detection writes identity.json into bpffs and later
+    // ctl fails with EPERM. The filesystem type, not pathname, decides.
+    #[test]
+    fn private_bpffs_mount_uses_runtime_sidecar() {
+        let p = identity_path_for_filesystem(Path::new("/tmp/private-bpffs/pin"), true);
+        assert!(
+            p.starts_with("/run/waf-sklookup/identities"),
+            "{}",
+            p.display()
+        );
+        assert!(!p.to_string_lossy().contains("identity.json"));
     }
 
     #[test]

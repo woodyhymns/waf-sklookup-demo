@@ -26,24 +26,29 @@ By default the loader looks for `policy.conf` beside `ports.conf`. Use `-policy-
 - All privileged ports (1–1023) are denied unless present in `allow_privileged`.
 - A tenant may open at most 32 ports.
 - The machine may open at most 128 ports.
+- There is no implicit reservation when `policy.conf` is absent; production deployments must create a policy file and reserve all management/fixed listeners.
 
 Example:
 
 ```text
 # deny additional ports; the five default-denied ports remain denied
 deny=22,25,53,3306,6379
+# reserve management/fixed listeners; dynamic wildcard bindings must not claim them
+reserve=8080,8443,9101
 allow_privileged=
 max_ports_per_tenant=32
 max_ports_per_machine=128
 ```
 
-Repeated `deny=` and `allow_privileged=` lines and comma/range values are accepted. Replacing an existing port number changes its binding without increasing the machine count.
+Repeated `deny=`, `reserve=`, and `allow_privileged=` lines and comma/range values are accepted. `deny` is a security/product prohibition; `reserve` is an operational management/fixed-listener isolation rule and returns a distinct remediation message. Replacing an existing port number changes its binding without increasing the machine count.
+
+A wildcard `sk_lookup` binding matches the same-family port on every local address in its network namespace. Reserve every metrics, ctl, SSH, host-agent, health-check, debug, OpenResty internal target, and TLS fallback listener in that namespace. Prefer an exact ingress VIP binding or a separate management address/interface/network namespace. See [SDD-001](specs/SDD-001-management-plane-and-capacity-safety.md) and [ADR-0001](architecture/ADR-0001-exact-vip-default-and-wildcard-safety.md).
 
 ## Commands and enforcement
 
 Opening through the root loader CLI or Unix socket requires `-tenant TENANT -site SITE`; `-cert ID` and `-policy ID` are optional. This applies to `add`, `open`, `load-ports`, `bulk open/add`, and `bulk fill`. Long-running `-ports`/`-tls-ports` seeding also requires `-tenant` and `-site` when `ports.conf` is missing. Closing does not require a binding.
 
-The same policy implementation covers desired-file parsing, loader add/open/bulk/fill, Unix socket control, startup, CLI `reconcile`/`apply`, SIGHUP, and startup reconcile. A desired state containing any unbound, denied, privileged-without-allowlist, or over-quota port refuses the whole apply before a plan is applied. It never partially punches holes; this is fail-closed.
+The same policy implementation covers desired-file parsing, loader add/open/bulk/fill, Unix socket control, startup, CLI `reconcile`/`apply`, SIGHUP, and startup reconcile. A desired state containing any unbound, denied, reserved, privileged-without-allowlist, or over-quota port refuses the whole apply before a plan is applied. It never partially punches holes; this is fail-closed.
 
 ## Migration
 
