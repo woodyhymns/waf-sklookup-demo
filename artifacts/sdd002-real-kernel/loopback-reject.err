@@ -1,0 +1,2 @@
+2026/08/19 11:32:49 audit uid=0 gid=0 pid=18856 op=add tenant=acme site=www ports=19104,-addr,127.0.0.1,-tenant,acme,-site,www,-pin-dir,/tmp/waf-sdd002/bpffs/pin,-ports-file,/tmp/waf-sdd002/work/ports.conf,-policy-file,/tmp/waf-sdd002/work/policy.conf ok=false
+2026/08/19 11:32:49 binding 127.0.0.1:19104 conflicts with reserved endpoint 127.0.0.1:19104 (metrics-listen) ; use a distinct ingress VIP or change the management endpoint

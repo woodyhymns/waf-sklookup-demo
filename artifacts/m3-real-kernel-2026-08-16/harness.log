@@ -1,0 +1,5 @@
+kernel=6.1.102
+namespace_inode=net:[4026532136]
+target=127.0.0.1:18080 metrics=127.0.0.1:19104 pin=/sys/fs/bpf/waf-m3ns
+reserved_skip=22,25,53,3306,6379,8080,8443,19104
+curl: (7) Failed to connect to 127.0.0.1 port 19104 after 0 ms: Couldn't connect to server

@@ -1,0 +1,17 @@
+M3 fill: count=60000 start=5000 skip="22,25,53,3306,6379,8080,8443,9101,18080" pin=/tmp/waf-sdd001-capacity/bpffs/pin (no OpenResty reload)
+add 4096/60000 (6.8%) elapsed=1ms rate=4046859/s
+add 8192/60000 (13.7%) elapsed=2ms rate=4005155/s
+add 12288/60000 (20.5%) elapsed=3ms rate=3990254/s
+add 16384/60000 (27.3%) elapsed=4ms rate=3911860/s
+add 20480/60000 (34.1%) elapsed=5ms rate=3882157/s
+add 24576/60000 (41.0%) elapsed=6ms rate=3843614/s
+add 28672/60000 (47.8%) elapsed=7ms rate=3816754/s
+add 32768/60000 (54.6%) elapsed=8ms rate=3791491/s
+add 36864/60000 (61.4%) elapsed=9ms rate=3768225/s
+add 40960/60000 (68.3%) elapsed=10ms rate=3738600/s
+add 45056/60000 (75.1%) elapsed=12ms rate=3711782/s
+add 49152/60000 (81.9%) elapsed=13ms rate=3680862/s
+add 53248/60000 (88.7%) elapsed=14ms rate=3655934/s
+add 57344/60000 (95.6%) elapsed=15ms rate=3624175/s
+add 60000/60000 (100.0%) elapsed=16ms rate=3608734/s
+2026/08/19 01:22:23 audit uid=0 gid=0 pid=11245 op=bulk tenant=m3 site=capacity ports=fill,-count,60000,-start,5000,-skip,22,25,53,3306,6379,8080,8443,9101,18080,-tenant,m3,-site,capacity,-pin-dir,/tmp/waf-sdd001-capacity/bpffs/pin,-policy-file,/tmp/waf-sdd001-capacity/work/policy.conf,-no-file,-full-ladder ok=true

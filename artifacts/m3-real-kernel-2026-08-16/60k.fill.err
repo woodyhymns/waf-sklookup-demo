@@ -1,0 +1,17 @@
+M3 fill: count=60000 start=5000 skip="22,25,53,3306,6379,8080,8443,19104" pin=/sys/fs/bpf/waf-m3ns (no OpenResty reload)
+add 4096/60000 (6.8%) elapsed=1ms rate=3305913/s
+add 8192/60000 (13.7%) elapsed=2ms rate=3264814/s
+add 12288/60000 (20.5%) elapsed=3ms rate=3251192/s
+add 16384/60000 (27.3%) elapsed=5ms rate=3239642/s
+add 20480/60000 (34.1%) elapsed=6ms rate=3229580/s
+add 24576/60000 (41.0%) elapsed=7ms rate=3211151/s
+add 28672/60000 (47.8%) elapsed=8ms rate=3202958/s
+add 32768/60000 (54.6%) elapsed=10ms rate=3188505/s
+add 36864/60000 (61.4%) elapsed=11ms rate=3082199/s
+add 40960/60000 (68.3%) elapsed=13ms rate=3063223/s
+add 45056/60000 (75.1%) elapsed=14ms rate=3054835/s
+add 49152/60000 (81.9%) elapsed=16ms rate=3039295/s
+add 53248/60000 (88.7%) elapsed=17ms rate=3022582/s
+add 57344/60000 (95.6%) elapsed=19ms rate=3007214/s
+add 60000/60000 (100.0%) elapsed=20ms rate=2992938/s
+2026/08/16 12:28:59 audit uid=0 gid=0 pid=6797 op=bulk tenant=m3 site=netns-capacity ports=fill,-count,60000,-start,5000,-skip,22,25,53,3306,6379,8080,8443,19104,-tenant,m3,-site,netns-capacity,-pin-dir,/sys/fs/bpf/waf-m3ns,-ports-file,/tmp/waf-m3ns/ports.conf,-policy-file,/tmp/waf-m3ns/policy.conf,-no-file,-full-ladder ok=true

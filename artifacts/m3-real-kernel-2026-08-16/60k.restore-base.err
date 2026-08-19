@@ -1,0 +1,2 @@
+add 1/1 (100.0%) elapsed=4µs rate=201045/s
+2026/08/16 12:28:59 audit uid=0 gid=0 pid=6845 op=add tenant=m3 site=netns-capacity ports=18181,-tenant,m3,-site,netns-capacity,-pin-dir,/sys/fs/bpf/waf-m3ns,-ports-file,/tmp/waf-m3ns/ports.conf,-policy-file,/tmp/waf-m3ns/policy.conf,-no-file ok=true

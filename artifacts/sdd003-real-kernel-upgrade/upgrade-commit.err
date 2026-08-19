@@ -1,0 +1,1 @@
+2026/08/19 14:07:36 audit uid=0 gid=0 pid=27859 op=upgrade tenant= site= ports=-candidate,/tmp/waf-sdd003/work/candidate.bpf.o,-health-window-ms,25,-pin-dir,/tmp/waf-sdd003/bpffs/pin,-freeze-file,/run/waf-sklookup/frozen ok=true

@@ -1,0 +1,71 @@
+# Production alert contract for waf-sklookup.
+# Install under the platform Prometheus rule directory after adapting labels and
+# notification routing. Thresholds intentionally match SDD-003 policy defaults:
+# a warning leaves time to stop changes before the configured freeze boundary.
+groups:
+  - name: waf-sklookup-production
+    rules:
+      - alert: WafSklookupExporterUnavailable
+        expr: waf_sklookup_exporter_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "waf-sklookup exporter cannot read the pinned dataplane"
+          runbook: "docs/dfx/operations-runbook.md#exporter-or-bpffs-unreadable"
+      - alert: WafSklookupMapPressureWarning
+        expr: waf_sklookup_open_ports_pressure_ratio >= 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "open_ports map is above 80% occupancy"
+          runbook: "docs/dfx/operations-runbook.md#map-pressure-or-capacity-freeze"
+      - alert: WafSklookupMapPressureCritical
+        expr: waf_sklookup_open_ports_pressure_ratio >= 0.85
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "open_ports map reached the configured 85% admission stop boundary"
+          runbook: "docs/dfx/operations-runbook.md#map-pressure-or-capacity-freeze"
+      - alert: WafSklookupSteeringFailure
+        expr: sum(increase(waf_sklookup_no_slot_total[5m])) + sum(increase(waf_sklookup_assign_err_eafnosupport_total[5m])) + sum(increase(waf_sklookup_assign_err_esocktnosupport_total[5m])) + sum(increase(waf_sklookup_assign_err_eprototype_total[5m])) + sum(increase(waf_sklookup_assign_err_other_total[5m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "sk_lookup steering emitted terminal failure counters"
+          runbook: "docs/dfx/operations-runbook.md#dataplane-steering-failure"
+      - alert: WafSklookupFrozen
+        expr: waf_sklookup_control_plane_frozen == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "waf-sklookup control-plane mutations are frozen"
+          runbook: "docs/dfx/operations-runbook.md#frozen-control-plane"
+      - alert: WafSklookupReservationNotActive
+        expr: waf_sklookup_runtime_reservation_state{state!="active"} == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "runtime management-endpoint reservation is missing or invalid"
+          runbook: "docs/dfx/operations-runbook.md#runtime-reservation-not-active"
+      - alert: WafSklookupUpgradeStuck
+        expr: waf_sklookup_upgrade_in_progress == 1
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "BPF program/link upgrade journal remains non-terminal"
+          runbook: "docs/dfx/operations-runbook.md#upgrade-stuck-or-rolled-back"
+      - alert: WafSklookupRevisionConflictBurst
+        expr: sum(increase(waf_sklookup_apply_fail_total[5m])) > 10 and on() waf_sklookup_last_rejection_reason{reason="revision"} == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "stale desired-revision conflicts are repeatedly rejecting mutations"
+          runbook: "docs/dfx/operations-runbook.md#revision-conflict-burst"

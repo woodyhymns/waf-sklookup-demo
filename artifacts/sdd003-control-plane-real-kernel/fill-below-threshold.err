@@ -1,0 +1,2 @@
+M3 fill: count=1309 start=30000 skip="8080,8443" pin=/tmp/waf-sdd003-control/bpffs/pin (no OpenResty reload)
+2026/08/19 14:21:53 audit uid=0 gid=0 pid=36226 op=bulk tenant=acme site=www ports=fill,-start,30000,-count,1309,-tenant,acme,-site,www,-full-ladder,-pin-dir,/tmp/waf-sdd003-control/bpffs/pin,-ports-file,/tmp/waf-sdd003-control/work/ports.conf,-policy-file,/tmp/waf-sdd003-control/work/policy.conf,-freeze-file,/run/waf-sklookup/frozen,-quiet ok=true

@@ -1,0 +1,1 @@
+{"schema_version":1,"phase":"committed","old":{"id":141,"tag":"54d365048953e520","open_ports_key_size":20,"open_ports_value_size":4},"candidate":{"id":145,"tag":"471cb9aea8882c6c","open_ports_key_size":20,"open_ports_value_size":4},"health_window_ms":25,"detail":"candidate promoted after health window"}

@@ -1,0 +1,78 @@
+# HELP waf_sklookup_assign_ok_total SYNs successfully steered to a listen socket
+# TYPE waf_sklookup_assign_ok_total counter
+waf_sklookup_assign_ok_total 0
+# HELP waf_sklookup_port_miss_total destination not steered; fell through to bind lookup
+# TYPE waf_sklookup_port_miss_total counter
+waf_sklookup_port_miss_total 2
+# HELP waf_sklookup_no_slot_total no listen socket in the selected shard or its fallback
+# TYPE waf_sklookup_no_slot_total counter
+waf_sklookup_no_slot_total 0
+# HELP waf_sklookup_invalid_group_total open_ports value had an out-of-range group or shard count
+# TYPE waf_sklookup_invalid_group_total counter
+waf_sklookup_invalid_group_total 0
+# HELP waf_sklookup_assign_err_eexist_total bpf_sk_assign -EEXIST: another sk_lookup program already selected a socket
+# TYPE waf_sklookup_assign_err_eexist_total counter
+waf_sklookup_assign_err_eexist_total 0
+# HELP waf_sklookup_assign_err_eafnosupport_total bpf_sk_assign -EAFNOSUPPORT: socket family incompatible with packet
+# TYPE waf_sklookup_assign_err_eafnosupport_total counter
+waf_sklookup_assign_err_eafnosupport_total 0
+# HELP waf_sklookup_assign_err_esocktnosupport_total bpf_sk_assign -ESOCKTNOSUPPORT: socket not listening (stale worker fd)
+# TYPE waf_sklookup_assign_err_esocktnosupport_total counter
+waf_sklookup_assign_err_esocktnosupport_total 0
+# HELP waf_sklookup_assign_err_eprototype_total bpf_sk_assign -EPROTOTYPE: L4 protocol mismatch
+# TYPE waf_sklookup_assign_err_eprototype_total counter
+waf_sklookup_assign_err_eprototype_total 0
+# HELP waf_sklookup_assign_err_other_total bpf_sk_assign failed with another errno
+# TYPE waf_sklookup_assign_err_other_total counter
+waf_sklookup_assign_err_other_total 0
+# HELP waf_sklookup_pass_non_tcp_total non-TCP traffic passed through untouched
+# TYPE waf_sklookup_pass_non_tcp_total counter
+waf_sklookup_pass_non_tcp_total 0
+# HELP waf_sklookup_pass_bad_family_total unsupported address family passed through untouched
+# TYPE waf_sklookup_pass_bad_family_total counter
+waf_sklookup_pass_bad_family_total 0
+# HELP waf_sklookup_shard_fallback_total selected shard was empty; served by shard 0 of the same group
+# TYPE waf_sklookup_shard_fallback_total counter
+waf_sklookup_shard_fallback_total 0
+# HELP waf_sklookup_apply_fail_total Desired-state applies rejected by the control plane
+# TYPE waf_sklookup_apply_fail_total counter
+waf_sklookup_apply_fail_total 1
+# HELP waf_sklookup_last_apply_central_seconds Unix time of the last accepted central apply
+# TYPE waf_sklookup_last_apply_central_seconds gauge
+waf_sklookup_last_apply_central_seconds 0
+# HELP waf_sklookup_exporter_up Exporter could read the pinned maps
+# TYPE waf_sklookup_exporter_up gauge
+waf_sklookup_exporter_up 1
+# HELP waf_sklookup_listen_shards Populated redir_socket shard slots across all groups
+# TYPE waf_sklookup_listen_shards gauge
+waf_sklookup_listen_shards 4
+# HELP waf_sklookup_open_ports_entries Number of steered destinations currently programmed
+# TYPE waf_sklookup_open_ports_entries gauge
+waf_sklookup_open_ports_entries 1310
+# HELP waf_sklookup_open_ports_max_entries Configured maximum number of open_ports BPF map entries
+# TYPE waf_sklookup_open_ports_max_entries gauge
+waf_sklookup_open_ports_max_entries 131072
+# HELP waf_sklookup_open_ports_pressure_ratio Share of open_ports map capacity currently programmed
+# TYPE waf_sklookup_open_ports_pressure_ratio gauge
+waf_sklookup_open_ports_pressure_ratio 0.0099945068359375
+# HELP waf_sklookup_open_ports_headroom_entries Remaining open_ports map capacity before hard admission failure
+# TYPE waf_sklookup_open_ports_headroom_entries gauge
+waf_sklookup_open_ports_headroom_entries 129762
+# HELP waf_sklookup_control_plane_frozen 1 when mutations are stopped by a safety freeze
+# TYPE waf_sklookup_control_plane_frozen gauge
+waf_sklookup_control_plane_frozen 1
+# HELP waf_sklookup_runtime_reservation_state Runtime reservation sidecar state (fixed vocabulary)
+# TYPE waf_sklookup_runtime_reservation_state gauge
+waf_sklookup_runtime_reservation_state{state="active"} 1
+# HELP waf_sklookup_runtime_reservation_endpoints Number of runtime-protected endpoints
+# TYPE waf_sklookup_runtime_reservation_endpoints gauge
+waf_sklookup_runtime_reservation_endpoints 3
+# HELP waf_sklookup_upgrade_phase Current persisted upgrade phase (fixed vocabulary)
+# TYPE waf_sklookup_upgrade_phase gauge
+waf_sklookup_upgrade_phase{phase="none"} 1
+# HELP waf_sklookup_upgrade_in_progress 1 while an upgrade journal is non-terminal
+# TYPE waf_sklookup_upgrade_in_progress gauge
+waf_sklookup_upgrade_in_progress 0
+# HELP waf_sklookup_last_rejection_reason Last bounded control-plane rejection code
+# TYPE waf_sklookup_last_rejection_reason gauge
+waf_sklookup_last_rejection_reason{reason="capacity"} 1

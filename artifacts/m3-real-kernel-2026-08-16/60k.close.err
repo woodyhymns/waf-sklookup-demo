@@ -1,0 +1,16 @@
+remove 4096/60000 (6.8%) elapsed=1ms rate=2836453/s
+remove 8192/60000 (13.7%) elapsed=2ms rate=2952991/s
+remove 12288/60000 (20.5%) elapsed=4ms rate=2984943/s
+remove 16384/60000 (27.3%) elapsed=5ms rate=3051007/s
+remove 20480/60000 (34.1%) elapsed=6ms rate=3129910/s
+remove 24576/60000 (41.0%) elapsed=7ms rate=3206235/s
+remove 28672/60000 (47.8%) elapsed=8ms rate=3266716/s
+remove 32768/60000 (54.6%) elapsed=9ms rate=3310143/s
+remove 36864/60000 (61.4%) elapsed=10ms rate=3363365/s
+remove 40960/60000 (68.3%) elapsed=11ms rate=3417909/s
+remove 45056/60000 (75.1%) elapsed=12ms rate=3475088/s
+remove 49152/60000 (81.9%) elapsed=13ms rate=3527680/s
+remove 53248/60000 (88.7%) elapsed=15ms rate=3539892/s
+remove 57344/60000 (95.6%) elapsed=15ms rate=3595324/s
+remove 60000/60000 (100.0%) elapsed=16ms rate=3633870/s
+2026/08/16 12:28:59 audit uid=0 gid=0 pid=6842 op=close-all tenant= site= ports=-pin-dir,/sys/fs/bpf/waf-m3ns ok=true

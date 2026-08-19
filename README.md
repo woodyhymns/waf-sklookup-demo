@@ -210,7 +210,7 @@ sudo ./rust/loader/target/release/waf-sklookup-loader list
 | `docs/rust-loader-plan.md` | Loader-only rewrite plan (R0) + what this crate implements |
 | `docs/acceptance-m3-rust.md` | Test recipe: M3 30K/60K via `LOADER_BIN`, isolated abs A vs B tax, Go vs Rust table |
 | `scripts/m3-fill-ports.sh` | M3 helper: `bulk fill` 30K or 60K into pinned `open_ports` |
-| `openresty/` | OpenResty 1.19.3.2 config + Lua for `$waf_external_port`; Tengine example listen |
+| `openresty/` | Demo config plus a source-coupled native `$waf_external_port` variable module; production native-module example and Tengine listen model |
 | `openresty/certs/` | `make certs` demo-only self-signed material (keys gitignored) |
 | `run-openresty-demo.sh` | Start/verify/stop OpenResty demo (HTTP + stock TLS fallback) |
 | `deploy/systemd/`, `docs/systemd.md` | Operator systemd units, environment examples, fail-closed policy, and installation guide |
@@ -222,8 +222,34 @@ sudo ./rust/loader/target/release/waf-sklookup-loader list
 | `docs/acceptance-m1.md` | QA checklist (M1-1…M1-5 required) |
 | `docs/acceptance-m2.md` | M2 QA: add/remove/list/bulk + 30K/60K fill |
 | `docs/acceptance-m3.md` | M3 stub (30K/60K memory ladder); seed via M2 bulk fill |
+| `docs/acceptance-m3-real-kernel-2026-08-16.md` | Real-kernel 30K/60K M3 capacity acceptance, raw evidence, isolation model, and remaining production gates |
+| `docs/acceptance-sdd001-real-kernel-2026-08-19.md` | SDD-001 real-kernel evidence: management-port reservation, pressure gauges, private bpffs identity, and 60K regression |
+| `docs/acceptance-sdd002-real-kernel-2026-08-19.md` | SDD-002 real-kernel evidence: endpoint-aware reservation, runtime manifest, multi-VIP same-port isolation, DFX status, and concurrent Unix-socket mutations |
+| `docs/architecture/industry-production-gap.md` | Industry comparison and production gap assessment against Linux sk_lookup, Cloudflare Tubular, and Cilium |
+| `docs/architecture/ADR-0001-exact-vip-default-and-wildcard-safety.md` | ADR: exact ingress VIP by default; wildcard bindings require management-plane isolation |
+| `docs/specs/README.md` | SDD requirements traceability index |
+| `docs/specs/SDD-001-management-plane-and-capacity-safety.md` | P0 specification for management-port reservation and map capacity/pressure safety |
+| `docs/specs/SDD-002-endpoint-aware-runtime-reservation.md` | P0 endpoint-aware reservation and runtime manifest contract for multi-VIP management-plane isolation |
+| `docs/specs/SDD-003-atomic-upgrade-and-rollback.md` | P0 single-node BPF program/link upgrade, ABI preflight, health window, rollback, revision/CAS, and pressure freeze contract |
+| `docs/specs/SDD-004-native-external-port-variable.md` | P0 native `$waf_external_port` variable contract; removes request-path Lua `/proc` scanning |
+| `docs/acceptance-sdd003-real-kernel-2026-08-19.md` | Real-kernel SDD-003 evidence: link commit/rollback, pressure freeze, revision CAS, and worker-fault recovery |
+| `docs/acceptance-sdd004-native-module-build-2026-08-19.md` | Native external-port source/build evidence and exact-image staging boundary |
+| `tests/e2e/sdd003-real-kernel-upgrade.sh` | Reproducible private-namespace upgrade/health-window/rollback drill |
+| `tests/e2e/sdd003-control-plane-real-kernel.sh` | Reproducible pressure-freeze and expected-revision CAS drill |
+| `tests/staging/README.md` | Exact OpenResty/Tengine native-module build and WAF HTTP/TLS/HTTP2/WebSocket staging harness |
+| `docs/dfx/production-readiness-plan.md` | Frozen P0/P1 production-readiness plan, external comparison, owners, and release evidence |
+| `docs/dfx/prometheus-alert-rules.yaml` | Prometheus alert contract and explicit freeze/rollback stop actions |
+| `docs/dfx/operations-runbook.md` | Operator runbook for freeze, rollback, worker rescan, and recovery |
+| `docs/dfx/production-release-gates.md` | Required Design/Function/Reliability/Performance/Observability/Security release gates |
+| `docs/dfx/test-matrix.md` | TDD-to-real-kernel-to-production traffic test matrix and stop rules |
+| `docs/dfx/openresty-tengine-staging-admission.md` | Mandatory real WAF/TLS/load/chaos staging matrix and canary stop rules |
 | `docs/design-thin-accept-openresty.md` | Transition design: PROXY v2 + thin-accept + OpenResty TLS |
 | `docs/perf-deep-compare.md` | Reload / PROXY / TPROXY / sk_lookup performance comparison |
+| `docs/waf-dynamic-port-sk-lookup-review-zh-CN.md` | 完整中文技术评审：可行性、性能、可观测性、风险分级与落地路线 |
+| `docs/waf-dynamic-port-sk-lookup-review-en.md` | Full English technical review: feasibility, performance, observability, risks, and rollout |
+| `docs/waf-dynamic-port-action-items-zh-CN.md` | 按优先级可直接拆分的整改行动清单 |
+| `docs/production-hardening-fix-progress.md` | 本轮生产硬化修复、真实内核验证、性能结论与剩余 staging 门禁 |
+| `docs/acceptance-real-kernel-hardening-2026-08-16.md` | 可提交、可审计的真实内核验收记录 |
 
 ## Relation to the WAF plan
 
@@ -233,13 +259,18 @@ sudo ./rust/loader/target/release/waf-sklookup-loader list
 
 ## Not production
 
-This is a **kernel steering proof + M1/P1 wiring + M2 control plane**, not a full WAF integration. Still out of scope here:
+This remains **a production candidate, not a broad production sign-off**. It now includes a 64-shard-per-group `SO_REUSEPORT` sockmap model, IPv4/IPv6 destination-family keys, pidfd-backed worker ownership checks, endpoint-aware runtime reservation, desired-state revision/CAS, pressure freeze, pinned program/link identity validation, single-node link upgrade/rollback with a health window, Prometheus/healthz DFX, and a configurable worker rescan interval (`-rescan-interval`, default `500ms`, minimum `100ms`).
 
-- M3 performance matrix ([docs/acceptance-m3.md](docs/acceptance-m3.md) stub; seed the map with `./scripts/m3-fill-ports.sh`)
+Still out of scope here:
+
+- M3 production hardware performance matrix ([docs/acceptance-m3.md](docs/acceptance-m3.md) stub; use `tests/e2e/bench-sklookup.sh` for reproducible real-kernel A/B sampling)
 - HTTP control-plane API (CLI bulk is the M3 contract)
 - Tengine runtime in the default helper (example conf + test plan only)
-- multi-worker reuseport sockmap
+- Exact OpenResty/Tengine image native-module proof; full WAF policy/TLS/certificate lifecycle, WebSocket, HTTP/2, and reload evidence (the staging harness is committed but must run against the actual image)
+- Target-hardware CPS/keep-alive/p99/p999/CPU/memory and multi-node canary evidence
+
+> The loader detects an unclean worker exit during its configured rescan window. Operators should choose `200–500ms` after measuring `/proc` scan cost at their worker count, or send `SIGUSR1` from the WAF worker lifecycle hook for immediate reconciliation.
 
 ## License
 
-Demo code: GPL-2.0 for the BPF program (required by helpers); userspace Go code Apache-2.0 / MIT as you prefer for derivatives — adjust before shipping product code.
+Demo code: GPL-2.0 for the BPF program (required by helpers); the Rust userspace loader has the license declared in `rust/loader/Cargo.toml`. Review and align all licensing before shipping product code.

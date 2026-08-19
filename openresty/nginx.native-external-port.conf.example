@@ -1,0 +1,63 @@
+# Production-only example: build ngx_http_waf_external_port_module against the
+# exact OpenResty/Tengine source and `nginx -V` configure arguments for this
+# image, then load its resulting .so before events/http.
+load_module modules/ngx_http_waf_external_port_module.so;
+
+worker_processes auto;
+error_log logs/error.log info;
+pid logs/nginx.pid;
+
+env WAF_EXPOSE_EXTERNAL_PORT;
+
+events {
+    worker_connections 16384;
+}
+
+http {
+    default_type application/octet-stream;
+    lua_package_path "$prefix/lua/?.lua;;";
+    init_by_lua_block { require "resty.core" }
+
+    # `$waf_external_port` is registered by the native module. Do not declare
+    # it with `set`, do not assign it from Lua, and do not enable
+    # waf.external_port legacy resolver in this image.
+    log_format waf_dynamic '$remote_addr:$remote_port ext_port=$waf_external_port '
+                           'internal_server_port=$server_port scheme=$scheme '
+                           'status=$status request=$request';
+    access_log logs/access.log waf_dynamic;
+
+    server {
+        # Tengine production model: one internal listener accepts plaintext and
+        # TLS. sk_lookup maps external destination ports onto this socket.
+        listen 127.0.0.1:8080 ssl https_allow_http reuseport;
+        server_name _;
+
+        ssl_certificate     certs/production.crt;
+        ssl_certificate_key certs/production.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+
+        # Every port-scoped ACL/rate-limit policy must reject an empty variable.
+        # Empty means native local sockaddr lookup failed; it must never fall
+        # back to the internal $server_port.
+        access_by_lua_block {
+            local external_port = ngx.var.waf_external_port
+            if not external_port or external_port == "" then
+                ngx.log(ngx.ERR, "waf external port unresolved")
+                return ngx.exit(ngx.HTTP_SERVICE_UNAVAILABLE)
+            end
+            -- Call the existing tenant/ACL/rate-limit policy with
+            -- `external_port`; do not invoke waf.external_port.resolve().
+        }
+
+        location = /waf-port-contract {
+            default_type text/plain;
+            return 200 "$waf_external_port\n";
+        }
+
+        location / {
+            proxy_pass http://waf_upstream;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
+    }
+}

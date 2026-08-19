@@ -58,6 +58,9 @@ pub struct LongRunningArgs {
     pub tls_ports_raw: String,
     pub tls_ports_set: bool,
     pub wait: Duration,
+    /// OpenResty worker socket health reconciliation cadence. This bounds the
+    /// temporary black-hole window after an unclean worker exit.
+    pub rescan_interval: Duration,
     pub pin_dir: PathBuf,
     pub ports_file: PathBuf,
     pub policy_file: Option<PathBuf>,
@@ -67,6 +70,8 @@ pub struct LongRunningArgs {
     pub policy: Option<String>,
     pub ctl_sock: Option<PathBuf>,
     pub ctl_group: Option<u32>,
+    /// `host:port` for the read-only Prometheus exporter. None disables it.
+    pub metrics_listen: Option<String>,
 }
 
 pub fn is_ctl_command(s: &str) -> bool {
@@ -94,6 +99,7 @@ pub fn is_ctl_command(s: &str) -> bool {
             | "migrate"
             | "check-overlap"
             | "retire-conf-listen"
+            | "upgrade"
             | "status"
             | "metrics"
             | "help"
@@ -125,8 +131,13 @@ impl ParsedFlags {
     }
 }
 
-/// Parse Go `flag`-compatible argv (`-name value`, `--name=value`). Bool flags take no value
-/// unless given as `-name=true`.
+/// Parse Go-style argv (`-name value`, `--name=value`). Bool flags take no
+/// value unless given as `-name=true`.
+///
+/// Unlike the standard Go `flag` package, flags may appear after positional
+/// ports. The public CLI documents `add PORT -tenant ...`, and treating
+/// `-tenant` as a second port made the documented dynamic-port operation fail
+/// before reaching the BPF map. `--` remains the explicit end-of-flags marker.
 pub fn parse_go_flags(
     argv: &[String],
     bool_flags: &[&str],
@@ -143,8 +154,11 @@ pub fn parse_go_flags(
             break;
         }
         if a == "-" || !a.starts_with('-') {
-            out.args.extend(argv[i..].iter().cloned());
-            break;
+            // Keep parsing: control commands are intentionally documented as
+            // `add PORT -tenant TENANT -site SITE`, not flags-first only.
+            out.args.push(a.clone());
+            i += 1;
+            continue;
         }
         let (name, inline) = split_flag(a)?;
         if name == "h" || name == "help" {
@@ -205,7 +219,7 @@ fn split_flag(a: &str) -> Result<(String, Option<String>)> {
 pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
     let flags = parse_go_flags(
         argv,
-        &["help", "h", "no-ctl"],
+        &["help", "h", "no-ctl", "no-metrics"],
         &[
             "mode",
             "listen",
@@ -214,6 +228,7 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
             "tls-target",
             "tls-ports",
             "wait",
+            "rescan-interval",
             "pin-dir",
             "ports-file",
             "policy-file",
@@ -223,6 +238,7 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
             "policy",
             "ctl-sock",
             "ctl-group",
+            "metrics-listen",
             "bpf",
         ],
     )?;
@@ -237,11 +253,34 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
         .or_else(|| std::env::var("BPF_IMPL").ok())
         .unwrap_or_else(|| "c".into());
     let wait_raw = flags.get("wait").unwrap_or("60s");
+    let rescan_raw = flags
+        .get("rescan-interval")
+        .map(str::to_owned)
+        .unwrap_or_else(|| std::env::var("RESCAN_INTERVAL").unwrap_or_else(|_| "500ms".into()));
+    let rescan_interval = parse_duration(&rescan_raw)
+        .with_context(|| format!("bad -rescan-interval {rescan_raw:?}"))?;
+    if rescan_interval < Duration::from_millis(100) {
+        bail!("-rescan-interval must be at least 100ms (got {rescan_raw:?})");
+    }
+    if rescan_interval > Duration::from_secs(60) {
+        bail!("-rescan-interval must not exceed 60s (got {rescan_raw:?})");
+    }
     let ctl_raw = flags.get("ctl-sock").map(str::to_owned).unwrap_or_else(|| {
         std::env::var("CTL_SOCK").unwrap_or_else(|_| crate::sockctl::DEFAULT_CTL_SOCK.into())
     });
-    let ctl_group = flags.get("ctl-group").map(str::parse).transpose()
+    let ctl_group = flags
+        .get("ctl-group")
+        .map(str::parse)
+        .transpose()
         .context("bad -ctl-group (numeric gid required)")?;
+    // Loopback by default: the exporter lives in a CAP_BPF process, so it must
+    // not be reachable off-box unless an operator explicitly asks for it.
+    let metrics_raw = flags
+        .get("metrics-listen")
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            std::env::var("METRICS_LISTEN").unwrap_or_else(|_| "127.0.0.1:9101".into())
+        });
     Ok(LongRunningArgs {
         bpf_impl: BpfImpl::parse(&bpf_raw)?,
         mode,
@@ -259,6 +298,7 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
         tls_ports_raw: flags.get("tls-ports").unwrap_or("").to_string(),
         tls_ports_set: flags.flag_set("tls-ports"),
         wait: parse_duration(wait_raw).with_context(|| format!("bad -wait {wait_raw:?}"))?,
+        rescan_interval,
         pin_dir: PathBuf::from(flags.get("pin-dir").unwrap_or(crate::pin::DEFAULT_PIN_DIR)),
         ports_file: PathBuf::from(flags.get("ports-file").unwrap_or("ports.conf")),
         policy_file: flags.get("policy-file").map(PathBuf::from),
@@ -266,8 +306,11 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
         site: flags.get("site").unwrap_or("").to_string(),
         cert: flags.get("cert").map(str::to_owned),
         policy: flags.get("policy").map(str::to_owned),
-        ctl_sock: (!flags.bool_flag("no-ctl") && !ctl_raw.is_empty()).then(|| PathBuf::from(ctl_raw)),
+        ctl_sock: (!flags.bool_flag("no-ctl") && !ctl_raw.is_empty())
+            .then(|| PathBuf::from(ctl_raw)),
         ctl_group,
+        metrics_listen: (!flags.bool_flag("no-metrics") && !metrics_raw.is_empty())
+            .then_some(metrics_raw),
     })
 }
 
@@ -336,6 +379,7 @@ pub fn print_long_running_usage() {
            -tls-target string\n        STOCK FALLBACK only: TLS listen (default \"127.0.0.1:8443\")\n\
            -tls-ports string\n        STOCK FALLBACK steered TLS ports (empty = product path)\n\
            -wait duration\n        openresty mode: max time to wait for target listen (default 60s)\n\
+           -rescan-interval duration\n        OpenResty worker health rescan (default \"500ms\"; min 100ms; env RESCAN_INTERVAL)\n\
            -pin-dir string\n        bpffs directory for pinned maps (default \"/sys/fs/bpf/waf-sklookup\")\n\
            -ports-file string\n        desired open_ports file (default \"ports.conf\")\n\
            -policy-file string\n        binding/deny/quota policy (default policy.conf next to ports file)\n\
@@ -343,7 +387,9 @@ pub fn print_long_running_usage() {
            -cert string, -policy string\n        optional stored binding identifiers\n\
            -ctl-sock string\n        authenticated Unix control socket (default \"/run/waf-sklookup/ctl.sock\"; empty disables)\n\
            -ctl-group uint\n        optional numeric group owner for the control socket\n\
-           -no-ctl\n        disable the Unix control socket\n\n",
+           -no-ctl\n        disable the Unix control socket\n\
+           -metrics-listen string\n        read-only Prometheus exporter address (default \"127.0.0.1:9101\"; env METRICS_LISTEN)\n\
+           -no-metrics\n        disable the Prometheus exporter\n\n",
         pad = "       "
     );
     eprint!("{}", crate::ctl::CTL_USAGE);
@@ -354,7 +400,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ctl_command_set() {
+    fn upgrade_is_a_top_level_control_command() {
+        assert!(is_ctl_command("upgrade"));
+    }
+
+    #[test]
+    fn parse_mode_and_bpf() {
         for c in [
             "add",
             "remove",
@@ -414,6 +465,70 @@ mod tests {
         let f = parse_go_flags(&argv, &[], &["mode", "ports"]).unwrap();
         assert_eq!(f.get("mode"), Some("openresty"));
         assert!(f.flag_set("ports"));
+    }
+
+    #[test]
+    fn positional_ports_can_precede_binding_flags() {
+        let argv = vec![
+            "18183".into(),
+            "-tenant".into(),
+            "acme".into(),
+            "-site".into(),
+            "www".into(),
+            "18184-18185".into(),
+        ];
+        let f = parse_go_flags(&argv, &[], &["tenant", "site"]).unwrap();
+        assert_eq!(f.args, vec!["18183", "18184-18185"]);
+        assert_eq!(f.get("tenant"), Some("acme"));
+        assert_eq!(f.get("site"), Some("www"));
+    }
+
+    #[test]
+    fn double_dash_still_ends_flag_parsing() {
+        let argv = vec![
+            "-tenant".into(),
+            "acme".into(),
+            "--".into(),
+            "-literal".into(),
+        ];
+        let f = parse_go_flags(&argv, &[], &["tenant"]).unwrap();
+        assert_eq!(f.get("tenant"), Some("acme"));
+        assert_eq!(f.args, vec!["-literal"]);
+    }
+
+    #[test]
+    fn rescan_interval_defaults_to_500ms_and_is_bounded() {
+        std::env::remove_var("RESCAN_INTERVAL");
+        assert_eq!(
+            parse_long_running(&[]).unwrap().rescan_interval,
+            Duration::from_millis(500)
+        );
+        let args = vec!["-rescan-interval".into(), "200ms".into()];
+        assert_eq!(
+            parse_long_running(&args).unwrap().rescan_interval,
+            Duration::from_millis(200)
+        );
+        let too_fast = vec!["-rescan-interval".into(), "99ms".into()];
+        assert!(parse_long_running(&too_fast).is_err());
+    }
+
+    #[test]
+    fn metrics_listen_defaults_to_loopback_and_can_be_disabled() {
+        std::env::remove_var("METRICS_LISTEN");
+        assert_eq!(
+            parse_long_running(&[]).unwrap().metrics_listen.as_deref(),
+            Some("127.0.0.1:9101"),
+            "exporter must default to loopback, never 0.0.0.0"
+        );
+        assert!(parse_long_running(&["-no-metrics".into()])
+            .unwrap()
+            .metrics_listen
+            .is_none());
+        let args = vec!["-metrics-listen".into(), "127.0.0.1:19999".into()];
+        assert_eq!(
+            parse_long_running(&args).unwrap().metrics_listen.as_deref(),
+            Some("127.0.0.1:19999")
+        );
     }
 
     #[test]
