@@ -223,6 +223,10 @@ pub fn pin_all(dir: &Path, bpf: &mut LoadedBpf<'_>, link: &mut libbpf_rs::Link) 
 }
 
 pub fn unpin_maps(dir: &Path) {
+    // The manifest is valid only while this instance's maps/program/link are
+    // pinned. Remove it first so a subsequent detached ctl cannot apply a
+    // stale runtime endpoint contract after loader shutdown.
+    crate::reservation::remove(dir);
     for path in all_pins(dir) {
         let _ = fs::remove_file(path);
     }

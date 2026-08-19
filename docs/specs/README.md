@@ -4,10 +4,11 @@
 
 | SDD | 主题 | 风险等级 | 当前状态 | TDD 覆盖 | 发布条件 |
 |---|---|---|---|---|---|
-| [SDD-001](SDD-001-management-plane-and-capacity-safety.md) | 管理面 reservation、精确 VIP 默认、map capacity/pressure | P0 | Accepted / implementation pending | T-001 至 T-007 | Rust 单测、isolated real kernel、OpenResty/Tengine integration、target-host load。 |
-| SDD-002（计划） | BPF program/link 原子升级、ABI manifest、rollback | P0 | Backlog | 待定义 | canary + fault injection。 |
-| SDD-003（计划） | 控制面版本化事务、generation、审计与多租户权限 | P0 | Backlog | 待定义 | concurrency + recovery drill。 |
-| SDD-004（计划） | TLS/WAF/Lua 端到端流量与性能 SLO | P0 | Backlog | 待定义 | target-host traffic/chaos matrix。 |
+| [SDD-001](SDD-001-management-plane-and-capacity-safety.md) | 管理面 reservation、精确 VIP 默认、map capacity/pressure | P0 | Partially implemented | T-001 至 T-007 | SDD-002 完成后更新 R3/R4/R8；继续执行 OpenResty/Tengine integration 与 target-host load。 |
+| [SDD-002](SDD-002-endpoint-aware-runtime-reservation.md) | endpoint-aware reservation、runtime manifest、多 VIP 管理面隔离 | P0 | Implemented / real-kernel verified | T-020 至 T-026 | isolated real kernel 已通过；继续执行真实 OpenResty/Tengine integration。 |
+| [SDD-003](SDD-003-atomic-upgrade-and-rollback.md) | BPF program/link 原子升级、ABI manifest、rollback | P0 | Proposed | SDD-003-R1 至 R5 | canary + fault injection。 |
+| SDD-004（计划） | 控制面版本化事务、generation、审计与多租户权限 | P0 | Backlog | 待定义 | concurrency + recovery drill。 |
+| SDD-005（计划） | TLS/WAF/Lua 端到端流量与性能 SLO | P0 | Backlog | 待定义 | target-host traffic/chaos matrix。 |
 
 ## 关联规则
 

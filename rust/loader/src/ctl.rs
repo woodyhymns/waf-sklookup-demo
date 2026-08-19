@@ -250,7 +250,8 @@ fn ctl_import_listens(args: &[String]) -> Result<()> {
     let bytes = fs::read(&conf).with_context(|| format!("read nginx config {}", conf.display()))?;
     let text = std::str::from_utf8(&bytes).context("nginx config is not UTF-8")?;
     let policy_file = policy_file_of(&flags);
-    let policy = crate::policy::load(&policy_file)?;
+    let pin_dir = pin_dir_of(&flags);
+    let policy = effective_policy(&policy_file, &pin_dir)?;
     let extra_skip = if let Some(raw) = flags.get("skip") {
         crate::ports::parse_port_list_flexible(raw)?
             .into_iter()
@@ -279,7 +280,7 @@ fn ctl_import_listens(args: &[String]) -> Result<()> {
         return Ok(());
     }
     let ports_file = ports_file_of(&flags);
-    let mut desired = desired_or_empty(&ports_file, &policy_file)?;
+    let mut desired = desired_or_empty(&ports_file, &policy_file, &pin_dir)?;
     for port in &ports {
         desired.insert(PortKey::new(*port, binding.dest), binding.clone());
     }
@@ -348,7 +349,11 @@ fn ctl_check_overlap(args: &[String]) -> Result<()> {
         eprint!("{CTL_USAGE}");
         return Ok(());
     }
-    let desired = desired_or_empty(&ports_file_of(&flags), &policy_file_of(&flags))?;
+    let desired = desired_or_empty(
+        &ports_file_of(&flags),
+        &policy_file_of(&flags),
+        &pin_dir_of(&flags),
+    )?;
     let (map, _) = map_if_available(&pin_dir_of(&flags));
     let conflicts = overlap(&real_ports(&nginx_conf_of(&flags))?, &desired, &map, &[]);
     if conflicts.is_empty() {
@@ -448,7 +453,7 @@ pub(crate) fn status_value_with_stamp(
     apply_stamp: &Path,
 ) -> Result<serde_json::Value> {
     let real = real_ports(nginx_conf)?;
-    let desired = desired_or_empty(ports_file, policy_file)?;
+    let desired = desired_or_empty(ports_file, policy_file, pin_dir)?;
     let (map, available) = map_if_available(pin_dir);
     let candidates: BTreeSet<u16> = desired
         .keys()
@@ -460,6 +465,7 @@ pub(crate) fn status_value_with_stamp(
     let plan = desired::plan(&desired, &map);
     let drift_put = plan.put_primary.len() + plan.put_tls.len();
     let drift_delete = plan.delete.len();
+    let reservation = crate::reservation::summary(pin_dir);
     Ok(serde_json::json!({
         "real": real.iter().copied().collect::<Vec<_>>(), "virtual": virtual_ports,
         "overlap": overlap_ports, "frozen": freeze_file.exists(), "desired_count": desired.len(),
@@ -470,7 +476,13 @@ pub(crate) fn status_value_with_stamp(
         "conflict_count": candidates.intersection(&real).count(),
         "drift": {"put": drift_put, "delete": drift_delete},
         "last_apply_central": crate::metrics::read_apply_stamp(apply_stamp),
-        "apply_fail_total": crate::metrics::read(metrics_file)
+        "apply_fail_total": crate::metrics::read(metrics_file),
+        "last_rejection_reason": crate::metrics::read_last_rejection(metrics_file),
+        "runtime_reservation": {
+            "state": reservation.state,
+            "generation": reservation.generation,
+            "endpoint_count": reservation.endpoint_count
+        }
     }))
 }
 
@@ -674,6 +686,7 @@ fn ctl_add(args: &[String]) -> Result<()> {
             "policy",
             "nginx-conf",
             "metrics-file",
+            "addr",
         ],
     )?;
     if maybe_help(&flags) {
@@ -773,7 +786,11 @@ fn ctl_list(args: &[String]) -> Result<()> {
     }
     let table = flags.bool_flag("virtual") || flags.get("kind").is_some();
     if table {
-        let desired = desired_or_empty(&ports_file_of(&flags), &policy_file_of(&flags))?;
+        let desired = desired_or_empty(
+            &ports_file_of(&flags),
+            &policy_file_of(&flags),
+            &pin_dir_of(&flags),
+        )?;
         let (map, _) = map_if_available(&pin_dir_of(&flags));
         let real = real_ports(&nginx_conf_of(&flags))?;
         let mut rows = crate::nginx_listen::classify(&desired, &map, &real);
@@ -834,6 +851,7 @@ fn ctl_bulk_add(args: &[String]) -> Result<()> {
             "policy",
             "nginx-conf",
             "metrics-file",
+            "addr",
         ],
     )?;
     if maybe_help(&flags) {
@@ -919,6 +937,7 @@ fn ctl_bulk_fill(args: &[String]) -> Result<()> {
             "policy",
             "nginx-conf",
             "metrics-file",
+            "addr",
         ],
     )?;
     if maybe_help(&flags) {
@@ -994,30 +1013,30 @@ pub(crate) fn apply_add(
     nginx_conf: &Path,
     metrics_file: &Path,
 ) -> Result<()> {
-    let mut desired = desired_or_empty(ports_file, policy_file)?;
+    let mut desired = desired_or_empty(ports_file, policy_file, pin_dir)?;
     let real = real_ports(nginx_conf)?;
     if let Err(err) = fail_on_overlap(&real, &desired, &CurrentPorts::new(), ports) {
-        crate::metrics::increment(metrics_file);
+        crate::metrics::record_rejection(metrics_file, &err.to_string());
         return Err(err);
     }
     for port in ports {
         desired.insert(PortKey::new(*port, binding.dest), binding.clone());
     }
-    let policy = crate::policy::load(policy_file)?;
+    let policy = effective_policy(policy_file, pin_dir)?;
     if let Err(err) = crate::policy::validate(&desired, &policy) {
-        crate::metrics::increment(metrics_file);
+        crate::metrics::record_rejection(metrics_file, &err.to_string());
         return Err(err);
     }
     let m = match load_pinned_open_ports(pin_dir) {
         Ok(m) => m,
         Err(err) => {
-            crate::metrics::increment(metrics_file);
+            crate::metrics::record_rejection(metrics_file, &err.to_string());
             return Err(err);
         }
     };
     let current = desired::read_map(&m)?;
     if let Err(err) = fail_on_overlap(&real, &desired, &current, &[]) {
-        crate::metrics::increment(metrics_file);
+        crate::metrics::record_rejection(metrics_file, &err.to_string());
         return Err(err);
     }
     if sync_file {
@@ -1070,7 +1089,8 @@ pub(crate) fn apply_remove(
 ) -> Result<()> {
     let m = load_pinned_open_ports(pin_dir)?;
     if sync_file {
-        let mut desired = desired::load_with_policy(ports_file, policy_file)?;
+        let policy = effective_policy(policy_file, pin_dir)?;
+        let mut desired = desired::load_with_effective_policy(ports_file, &policy)?;
         for port in ports {
             desired.remove(&PortKey::new(*port, Dest::AnyV4));
         }
@@ -1197,9 +1217,14 @@ pub fn open_pinned_ports(
     Ok(())
 }
 
-fn desired_or_empty(path: &Path, policy_file: &Path) -> Result<DesiredPorts> {
+fn effective_policy(policy_file: &Path, pin_dir: &Path) -> Result<crate::policy::Policy> {
+    crate::reservation::effective_policy(policy_file, pin_dir).map(|(policy, _)| policy)
+}
+
+fn desired_or_empty(path: &Path, policy_file: &Path, pin_dir: &Path) -> Result<DesiredPorts> {
     if path.exists() {
-        desired::load_with_policy(path, policy_file)
+        let policy = effective_policy(policy_file, pin_dir)?;
+        desired::load_with_effective_policy(path, &policy)
     } else {
         Ok(DesiredPorts::new())
     }
@@ -1217,6 +1242,7 @@ pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
             "batch",
             "nginx-conf",
             "metrics-file",
+            "addr",
         ],
     )?;
     if maybe_help(&flags) {
@@ -1224,7 +1250,8 @@ pub(crate) fn ctl_reconcile(args: &[String]) -> Result<()> {
         return Ok(());
     }
     reject_frozen(&flags, "reconcile/apply", "", "", &[])?;
-    let desired = desired::load_with_policy(&ports_file_of(&flags), &policy_file_of(&flags))?;
+    let policy = effective_policy(&policy_file_of(&flags), &pin_dir_of(&flags))?;
+    let desired = desired::load_with_effective_policy(&ports_file_of(&flags), &policy)?;
     let real = real_ports(&nginx_conf_of(&flags))?;
     if let Err(err) = fail_on_overlap(&real, &desired, &CurrentPorts::new(), &[]) {
         crate::metrics::increment(&metrics_file_of(&flags));
@@ -1311,7 +1338,8 @@ fn ctl_apply_central(args: &[String]) -> Result<()> {
         .or_else(|| flags.get("from-central"))
         .unwrap_or("central/desired-state.json");
     let incoming = crate::central::load(Path::new(source))?;
-    crate::policy::validate(&incoming, &crate::policy::load(&policy_file_of(&flags))?)?;
+    let policy = effective_policy(&policy_file_of(&flags), &pin_dir_of(&flags))?;
+    crate::policy::validate(&incoming, &policy)?;
     let real = real_ports(&nginx_conf_of(&flags))?;
     if let Err(err) = fail_on_overlap(&real, &incoming, &CurrentPorts::new(), &[]) {
         crate::metrics::increment(&metrics_file_of(&flags));
@@ -1324,11 +1352,7 @@ fn ctl_apply_central(args: &[String]) -> Result<()> {
             return Err(err);
         }
     }
-    crate::central::apply_cache(
-        Path::new(source),
-        &ports_file_of(&flags),
-        &policy_file_of(&flags),
-    )?;
+    crate::central::apply_cache(Path::new(source), &ports_file_of(&flags), &policy)?;
     let mut reconcile = vec![
         "-pin-dir".into(),
         pin_dir_of(&flags).display().to_string(),
@@ -1479,6 +1503,40 @@ mod tests {
         let binding = binding_from_flags(&flags).unwrap();
         assert_eq!(binding.tenant, "acme");
         assert_eq!(binding.site, "www");
+    }
+
+    #[test]
+    fn direct_add_accepts_exact_vip_addr_flag() {
+        let (dir, ports, policy, nginx, pin, metrics) = fixture();
+        fs::write(&nginx, "").unwrap();
+        let args = strings(&[
+            "19104",
+            "-addr",
+            "127.0.0.2",
+            "-tenant",
+            "acme",
+            "-site",
+            "www",
+            "-pin-dir",
+            pin.to_str().unwrap(),
+            "-ports-file",
+            ports.to_str().unwrap(),
+            "-policy-file",
+            policy.to_str().unwrap(),
+            "-nginx-conf",
+            nginx.to_str().unwrap(),
+            "-metrics-file",
+            metrics.to_str().unwrap(),
+        ]);
+        let err = ctl_add(&args).unwrap_err().to_string();
+        // The map is intentionally absent in this unit fixture; reaching that
+        // error proves `-addr` parsed and produced a normal add binding.
+        assert!(!err.contains("flag provided but not defined"), "{err}");
+        assert!(
+            err.contains("load pinned") || err.contains("No such") || err.contains("not found"),
+            "{err}"
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1670,7 +1728,11 @@ mod tests {
         assert_eq!(v["drift"]["put"], 1);
         assert_eq!(v["drift"]["delete"], 0);
         assert!(v["last_apply_central"].is_null());
+        assert!(v["last_rejection_reason"].is_null());
         assert_eq!(v["frozen"], false);
+        assert_eq!(v["runtime_reservation"]["state"], "missing");
+        assert!(v["runtime_reservation"]["generation"].is_null());
+        assert_eq!(v["runtime_reservation"]["endpoint_count"], 0);
     }
 
     #[test]

@@ -88,11 +88,10 @@ pub fn load(path: &Path) -> Result<DesiredPorts> {
 pub fn apply_cache(
     central_path: &Path,
     ports_file: &Path,
-    policy_file: &Path,
+    policy: &crate::policy::Policy,
 ) -> Result<DesiredPorts> {
     let desired = load(central_path)?;
-    let policy = crate::policy::load(policy_file)?;
-    crate::policy::validate(&desired, &policy)?;
+    crate::policy::validate(&desired, policy)?;
     desired::write(ports_file, &desired)?;
     Ok(desired)
 }
@@ -148,6 +147,7 @@ mod tests {
         )
         .unwrap();
         fs::write(&central, r#"{"version":1,"ports":[{"tenant":"demo","site":"local","port":18081},{"tenant":"demo","site":"local","port":18443,"tls":true,"cert":"local","policy":"default"}]}"#).unwrap();
+        let policy = crate::policy::load(&policy).unwrap();
         let got = apply_cache(&central, &cache, &policy).unwrap();
         assert_eq!(got.len(), 2);
         let text = fs::read_to_string(&cache).unwrap();

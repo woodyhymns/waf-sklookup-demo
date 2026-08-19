@@ -71,10 +71,20 @@ pub fn load(path: &Path) -> Result<DesiredPorts> {
 }
 
 pub fn load_with_policy(path: &Path, policy_path: &Path) -> Result<DesiredPorts> {
+    let policy = crate::policy::load(policy_path)?;
+    load_with_effective_policy(path, &policy)
+}
+
+/// Load a desired-state file against the exact effective policy selected by an
+/// attached loader or detached control process. This avoids re-reading only the
+/// static policy file after runtime endpoint reservations have been merged.
+pub fn load_with_effective_policy(
+    path: &Path,
+    policy: &crate::policy::Policy,
+) -> Result<DesiredPorts> {
     let file =
         File::open(path).with_context(|| format!("open desired ports file {}", path.display()))?;
-    let policy = crate::policy::load(policy_path)?;
-    load_from_reader_with_policy(file, &policy)
+    load_from_reader_with_policy(file, policy)
         .with_context(|| format!("read desired ports file {}", path.display()))
 }
 

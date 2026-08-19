@@ -8,13 +8,14 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use libbpf_rs::{MapCore, MapFlags};
 
 pub const DEFAULT_METRICS_FILE: &str = "/run/waf-sklookup/apply_fail_total";
 pub const DEFAULT_APPLY_STAMP: &str = "/run/waf-sklookup/last-apply-central";
+pub const DEFAULT_REJECTION_FILE: &str = "/run/waf-sklookup/last_rejection_reason";
 
 /// Immutable capacity view derived from one map-entry snapshot. Keeping these
 /// fields together prevents operators from seeing an entries value from one
@@ -62,6 +63,55 @@ pub fn increment(path: &Path) {
         let _ = fs::create_dir_all(parent);
     }
     let _ = fs::write(path, format!("{next}\n"));
+}
+
+/// Stable control-plane rejection vocabulary. Never persist raw error strings:
+/// they can contain tenant names, paths, addresses, and unbounded input.
+pub fn classify_rejection(error: &str) -> &'static str {
+    let error = error.to_ascii_lowercase();
+    if error.contains("reserved") {
+        "reservation"
+    } else if error.contains("denied") {
+        "deny"
+    } else if error.contains("quota") || error.contains("capacity") {
+        "capacity"
+    } else if error.contains("overlap") || error.contains("conflict") {
+        "overlap"
+    } else if error.contains("frozen") {
+        "frozen"
+    } else if error.contains("identity") || error.contains("manifest") {
+        "identity"
+    } else {
+        "other"
+    }
+}
+
+pub fn rejection_path(metrics_file: &Path) -> PathBuf {
+    metrics_file
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("last_rejection_reason")
+}
+
+pub fn record_rejection(metrics_file: &Path, error: &str) {
+    increment(metrics_file);
+    let path = rejection_path(metrics_file);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(path, format!("{}\n", classify_rejection(error)));
+}
+
+pub fn read_last_rejection(metrics_file: &Path) -> Option<String> {
+    fs::read_to_string(rejection_path(metrics_file))
+        .ok()
+        .map(|raw| raw.trim().to_owned())
+        .filter(|value| {
+            matches!(
+                value.as_str(),
+                "reservation" | "deny" | "capacity" | "overlap" | "frozen" | "identity" | "other"
+            )
+        })
 }
 
 pub fn rfc3339_now() -> String {
@@ -423,6 +473,28 @@ mod tests {
         assert!((c.pressure_ratio - 0.457763671875).abs() < 1e-12);
         assert!(CapacitySnapshot::new(131_073, 131_072).is_none());
         assert!(CapacitySnapshot::new(1, 0).is_none());
+    }
+
+    #[test]
+    fn rejection_reason_is_bounded_and_persisted() {
+        assert_eq!(
+            classify_rejection("binding 127.0.0.1:9101 conflicts with reserved endpoint"),
+            "reservation"
+        );
+        assert_eq!(classify_rejection("tenant port quota exceeded"), "capacity");
+        assert_eq!(
+            classify_rejection("untrusted free-form 10.0.0.1 tenant=acme"),
+            "other"
+        );
+        let dir = std::env::temp_dir().join(format!("waf-metrics-{}", std::process::id()));
+        let metrics = dir.join("apply_fail_total");
+        record_rejection(&metrics, "port 9101 is reserved by policy");
+        assert_eq!(read(&metrics), 1);
+        assert_eq!(
+            read_last_rejection(&metrics).as_deref(),
+            Some("reservation")
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

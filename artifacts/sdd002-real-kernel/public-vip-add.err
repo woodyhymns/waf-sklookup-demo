@@ -1,0 +1,2 @@
+add 1/1 (100.0%) elapsed=7µs rate=128502/s
+2026/08/19 11:32:49 audit uid=0 gid=0 pid=18861 op=add tenant=acme site=www ports=19104,-addr,127.0.0.2,-tenant,acme,-site,www,-pin-dir,/tmp/waf-sdd002/bpffs/pin,-ports-file,/tmp/waf-sdd002/work/ports.conf,-policy-file,/tmp/waf-sdd002/work/policy.conf ok=true

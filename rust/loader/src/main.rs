@@ -18,6 +18,7 @@ mod openresty;
 mod pin;
 mod policy;
 mod ports;
+mod reservation;
 mod sockctl;
 mod toy;
 
@@ -258,14 +259,33 @@ fn validate_listener_families(
     Ok(())
 }
 
+fn runtime_reservations(args: &LongRunningArgs) -> Result<Vec<policy::ReservedEndpoint>> {
+    let mut endpoints = vec![
+        reservation::endpoint_from_socket(&args.target, "primary-target")?,
+        reservation::endpoint_from_socket(&args.tls_target, "tls-target")?,
+    ];
+    if let Some(metrics) = &args.metrics_listen {
+        endpoints.push(reservation::endpoint_from_socket(
+            metrics,
+            "metrics-listen",
+        )?);
+    }
+    Ok(endpoints)
+}
+
 fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs) -> Result<()> {
     let _pin_lock = acquire_loader_lock()?;
     let policy_file = args
         .policy_file
         .clone()
         .unwrap_or_else(|| policy::default_path(&args.ports_file));
+    let runtime_reservations = runtime_reservations(&args)?;
+    let mut effective_policy = policy::load(&policy_file)?;
+    effective_policy
+        .reserve_endpoints
+        .extend(runtime_reservations.iter().cloned());
     let desired = if args.ports_file.exists() {
-        let state = desired::load_with_policy(&args.ports_file, &policy_file)?;
+        let state = desired::load_with_effective_policy(&args.ports_file, &effective_policy)?;
         log_msg(format_args!(
             "loaded desired ports from {}",
             args.ports_file.display()
@@ -300,7 +320,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
             binding.cert.clone_from(&args.cert);
             binding.policy.clone_from(&args.policy);
         }
-        policy::validate(&state, &policy::load(&policy_file)?)?;
+        policy::validate(&state, &effective_policy)?;
         desired::write(&args.ports_file, &state)?;
         log_msg(format_args!(
             "seeded missing desired ports file {} from -ports/-tls-ports",
@@ -380,6 +400,15 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         }
     }
 
+    // Detached ctl processes must learn the actual management/listener
+    // endpoints from the attached instance, not infer them from static config.
+    let reservation_manifest = reservation::write(&args.pin_dir, runtime_reservations)?;
+    log_msg(format_args!(
+        "runtime reservation manifest generation={} endpoints={}",
+        reservation_manifest.generation,
+        reservation_manifest.endpoints.len()
+    ));
+
     // The shard count written into open_ports must match the live listen set,
     // otherwise the BPF program can select a shard index with no socket behind
     // it and drop the SYN.
@@ -450,11 +479,13 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
             let _guard = mutations
                 .lock()
                 .map_err(|_| anyhow::anyhow!("mutation lock poisoned"))?;
-            match desired::load_with_policy(&args.ports_file, &policy_file).and_then(|state| {
-                bpf.with_open_ports(|map| {
-                    desired::reconcile_map_with_shards(map, &state, live_shards)
-                })
-            }) {
+            match desired::load_with_effective_policy(&args.ports_file, &effective_policy).and_then(
+                |state| {
+                    bpf.with_open_ports(|map| {
+                        desired::reconcile_map_with_shards(map, &state, live_shards)
+                    })
+                },
+            ) {
                 Ok(plan) => log_msg(format_args!(
                     "SIGHUP reconcile: put={} delete={} shards={live_shards} file={}",
                     plan.put_len(),

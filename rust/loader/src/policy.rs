@@ -2,14 +2,26 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
 use crate::desired::{DesiredPorts, PortBinding};
+use crate::key::{Dest, PortKey};
 use crate::ports::parse_port_list_flexible;
 
 const DEFAULT_DENY: &[u16] = &[22, 25, 53, 3306, 6379];
+
+/// A family/address-aware endpoint that a dynamic binding must not capture.
+/// `source` is intentionally bounded (policy.conf or a loader-owned runtime
+/// endpoint name) so it is safe to surface in audit/status output.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReservedEndpoint {
+    pub port: u16,
+    pub dest: Dest,
+    pub source: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
@@ -18,6 +30,9 @@ pub struct Policy {
     /// claim. Unlike `deny`, this is an operational isolation rule and its
     /// error tells operators to move/declare the endpoint or use an exact VIP.
     pub reserve: BTreeSet<u16>,
+    /// `reserve_endpoint=` entries preserve multi-VIP isolation unlike legacy
+    /// `reserve=`, which intentionally remains a conservative global-port rule.
+    pub reserve_endpoints: BTreeSet<ReservedEndpoint>,
     pub allow_privileged: BTreeSet<u16>,
     pub max_ports_per_tenant: usize,
     pub max_ports_per_machine: usize,
@@ -28,6 +43,7 @@ impl Default for Policy {
         Self {
             deny: DEFAULT_DENY.iter().copied().collect(),
             reserve: BTreeSet::new(),
+            reserve_endpoints: BTreeSet::new(),
             allow_privileged: BTreeSet::new(),
             max_ports_per_tenant: 32,
             max_ports_per_machine: 128,
@@ -78,6 +94,13 @@ fn parse(raw: &str) -> Result<Policy> {
                         .with_context(|| format!("line {line_no}: reserve"))?,
                 );
             }
+            "reserve_endpoint" => {
+                for endpoint in parse_reserved_endpoints(value.trim())
+                    .with_context(|| format!("line {line_no}: reserve_endpoint"))?
+                {
+                    out.reserve_endpoints.insert(endpoint);
+                }
+            }
             "allow_privileged" => {
                 if !allow_seen {
                     out.allow_privileged.clear();
@@ -108,6 +131,34 @@ fn parse(raw: &str) -> Result<Policy> {
     // Fail at parse time rather than at the first map write that overflows.
     validate_capacity(&out)?;
     Ok(out)
+}
+
+fn parse_reserved_endpoints(raw: &str) -> Result<Vec<ReservedEndpoint>> {
+    if raw.trim().is_empty() {
+        bail!("reserve_endpoint requires IP:PORT or [IPv6]:PORT");
+    }
+    raw.split(',')
+        .map(str::trim)
+        .map(|item| {
+            let socket: SocketAddr = item.parse().with_context(|| {
+                format!("invalid endpoint {item:?}; expected IP:PORT or [IPv6]:PORT")
+            })?;
+            if socket.port() == 0 {
+                bail!("endpoint {item:?} has invalid port 0");
+            }
+            let dest = match socket.ip() {
+                IpAddr::V4(ip) if ip.is_unspecified() => Dest::AnyV4,
+                IpAddr::V4(ip) => Dest::V4(ip),
+                IpAddr::V6(ip) if ip.is_unspecified() => Dest::AnyV6,
+                IpAddr::V6(ip) => Dest::V6(ip),
+            };
+            Ok(ReservedEndpoint {
+                port: socket.port(),
+                dest,
+                source: "policy.conf".into(),
+            })
+        })
+        .collect()
 }
 
 fn valid_identity(name: &str, value: &str) -> Result<()> {
@@ -141,6 +192,27 @@ pub fn validate_binding(port: u16, binding: &PortBinding, policy: &Policy) -> Re
     Ok(())
 }
 
+fn endpoints_intersect(binding: Dest, reserved: Dest) -> bool {
+    if binding.family() != reserved.family() {
+        return false;
+    }
+    binding.is_wildcard() || reserved.is_wildcard() || binding == reserved
+}
+
+fn validate_endpoint_reservations(key: PortKey, policy: &Policy) -> Result<()> {
+    for reservation in &policy.reserve_endpoints {
+        if key.port == reservation.port && endpoints_intersect(key.dest, reservation.dest) {
+            bail!(
+                "binding {key} conflicts with reserved endpoint {}:{} ({}) ; use a distinct ingress VIP or change the management endpoint",
+                reservation.dest,
+                reservation.port,
+                reservation.source
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn validate(desired: &DesiredPorts, policy: &Policy) -> Result<()> {
     if desired.len() > policy.max_ports_per_machine {
         bail!(
@@ -152,6 +224,7 @@ pub fn validate(desired: &DesiredPorts, policy: &Policy) -> Result<()> {
     let mut tenants: HashMap<&str, usize> = HashMap::new();
     for (key, binding) in desired {
         validate_binding(key.port, binding, policy)?;
+        validate_endpoint_reservations(*key, policy)?;
         let n = tenants.entry(binding.tenant.as_str()).or_default();
         *n += 1;
         if *n > policy.max_ports_per_tenant {
@@ -317,6 +390,36 @@ mod tests {
     // SDD-001 / T-002: the checked-in deployment policy must reserve the
     // default internal and metrics endpoints, so an operator cannot turn the
     // default control plane into a wildcard dynamic-port binding by accident.
+    // SDD-002 / T-020..T-022: endpoint reservations are family/address aware.
+    // A loopback exporter must not prevent an exact public VIP from claiming
+    // the same numeric port, while wildcard IPv4 would capture that exporter.
+    #[test]
+    fn exact_reservation_preserves_multi_vip_isolation() {
+        let p = parse("reserve_endpoint=127.0.0.1:9101\n").unwrap();
+        let mut desired = DesiredPorts::new();
+        desired.insert(
+            PortKey::new(9101, crate::key::Dest::V4("10.0.0.10".parse().unwrap())),
+            binding("acme"),
+        );
+        assert!(validate(&desired, &p).is_ok());
+
+        desired.clear();
+        desired.insert(
+            PortKey::new(9101, crate::key::Dest::V4("127.0.0.1".parse().unwrap())),
+            binding("acme"),
+        );
+        let same = validate(&desired, &p).unwrap_err().to_string();
+        assert!(same.contains("policy.conf"), "{same}");
+
+        desired.clear();
+        desired.insert(PortKey::wildcard_v4(9101), binding("acme"));
+        assert!(validate(&desired, &p).is_err());
+
+        desired.clear();
+        desired.insert(PortKey::new(9101, crate::key::Dest::AnyV6), binding("acme"));
+        assert!(validate(&desired, &p).is_ok());
+    }
+
     #[test]
     fn repository_policy_reserves_default_management_endpoints() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))

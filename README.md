@@ -224,12 +224,16 @@ sudo ./rust/loader/target/release/waf-sklookup-loader list
 | `docs/acceptance-m3.md` | M3 stub (30K/60K memory ladder); seed via M2 bulk fill |
 | `docs/acceptance-m3-real-kernel-2026-08-16.md` | Real-kernel 30K/60K M3 capacity acceptance, raw evidence, isolation model, and remaining production gates |
 | `docs/acceptance-sdd001-real-kernel-2026-08-19.md` | SDD-001 real-kernel evidence: management-port reservation, pressure gauges, private bpffs identity, and 60K regression |
+| `docs/acceptance-sdd002-real-kernel-2026-08-19.md` | SDD-002 real-kernel evidence: endpoint-aware reservation, runtime manifest, multi-VIP same-port isolation, DFX status, and concurrent Unix-socket mutations |
 | `docs/architecture/industry-production-gap.md` | Industry comparison and production gap assessment against Linux sk_lookup, Cloudflare Tubular, and Cilium |
 | `docs/architecture/ADR-0001-exact-vip-default-and-wildcard-safety.md` | ADR: exact ingress VIP by default; wildcard bindings require management-plane isolation |
 | `docs/specs/README.md` | SDD requirements traceability index |
 | `docs/specs/SDD-001-management-plane-and-capacity-safety.md` | P0 specification for management-port reservation and map capacity/pressure safety |
+| `docs/specs/SDD-002-endpoint-aware-runtime-reservation.md` | P0 endpoint-aware reservation and runtime manifest contract for multi-VIP management-plane isolation |
+| `docs/specs/SDD-003-atomic-upgrade-and-rollback.md` | P0 generation-based BPF program/link upgrade, health window, rollback, and canary contract (proposed) |
 | `docs/dfx/production-release-gates.md` | Required Design/Function/Reliability/Performance/Observability/Security release gates |
 | `docs/dfx/test-matrix.md` | TDD-to-real-kernel-to-production traffic test matrix and stop rules |
+| `docs/dfx/openresty-tengine-staging-admission.md` | Mandatory real WAF/TLS/load/chaos staging matrix and canary stop rules |
 | `docs/design-thin-accept-openresty.md` | Transition design: PROXY v2 + thin-accept + OpenResty TLS |
 | `docs/perf-deep-compare.md` | Reload / PROXY / TPROXY / sk_lookup performance comparison |
 | `docs/waf-dynamic-port-sk-lookup-review-zh-CN.md` | 完整中文技术评审：可行性、性能、可观测性、风险分级与落地路线 |

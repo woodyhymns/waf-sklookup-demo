@@ -275,15 +275,16 @@ fn execute(
             } else {
                 crate::nginx_listen::inner_real_ports()
             };
-            if let Ok(wanted) = crate::desired::load_with_policy(
-                ports_file,
-                &crate::policy::default_path(ports_file),
-            ) {
-                for (key, binding) in wanted {
-                    if !ports.iter().any(|(k, _)| *k == key) {
-                        // Desired-but-not-yet-programmed: report a single shard;
-                        // the loader stamps the real count on next reconcile.
-                        ports.push((key, crate::key::PortVal::new(binding.slot, 1)));
+            let policy_file = crate::policy::default_path(ports_file);
+            if let Ok((policy, _)) = crate::reservation::effective_policy(&policy_file, pin_dir) {
+                if let Ok(wanted) = crate::desired::load_with_effective_policy(ports_file, &policy)
+                {
+                    for (key, binding) in wanted {
+                        if !ports.iter().any(|(k, _)| *k == key) {
+                            // Desired-but-not-yet-programmed: report a single shard;
+                            // the loader stamps the real count on next reconcile.
+                            ports.push((key, crate::key::PortVal::new(binding.slot, 1)));
+                        }
                     }
                 }
             }
@@ -431,19 +432,46 @@ fn execute(
     Ok(json!({"op":actual_op,"count":ports.len()}))
 }
 
+/// Extract the transport-only `-sock` flag without attempting to parse the
+/// operation-specific flags that follow `ctl add|bulk`. The previous generic
+/// parser saw `-addr` while looking only for `-sock` and rejected valid multi-
+/// VIP requests before request construction.
+fn split_socket_flag(args: &[String]) -> Result<(Option<String>, Vec<String>)> {
+    let mut socket = None;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "-sock" || arg == "--sock" {
+            i += 1;
+            if i >= args.len() {
+                bail!("flag needs an argument: -sock");
+            }
+            socket = Some(args[i].clone());
+        } else if let Some(value) = arg
+            .strip_prefix("-sock=")
+            .or_else(|| arg.strip_prefix("--sock="))
+        {
+            socket = Some(value.to_owned());
+        } else {
+            rest.push(arg.clone());
+        }
+        i += 1;
+    }
+    Ok((socket, rest))
+}
+
 pub fn run_client(args: &[String]) -> Result<()> {
-    let flags = crate::cli::parse_go_flags(args, &[], &["sock"])?;
-    if flags.args.is_empty() {
+    let (configured_socket, command) = split_socket_flag(args)?;
+    if command.is_empty() {
         bail!("ctl needs list|status|add|remove|reconcile|bulk");
     }
-    let sock = flags
-        .get("sock")
-        .map(str::to_owned)
+    let sock = configured_socket
         .unwrap_or_else(|| std::env::var("CTL_SOCK").unwrap_or_else(|_| DEFAULT_CTL_SOCK.into()));
     if sock.is_empty() {
         bail!("control socket is disabled (empty path)");
     }
-    let cmd = &flags.args;
+    let cmd = &command;
     let mut req = Request {
         op: cmd[0].clone(),
         ports: Vec::new(),
@@ -516,6 +544,28 @@ pub fn run_client(args: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // SDD-002 / T-025: client transport flags must not consume or reject
+    // business flags such as -addr before the request parser sees them.
+    #[test]
+    fn socket_flag_is_extracted_without_rejecting_business_flags() {
+        let args = vec![
+            "add".into(),
+            "19104".into(),
+            "-addr".into(),
+            "127.0.0.2".into(),
+            "-tenant".into(),
+            "acme".into(),
+            "-sock".into(),
+            "/tmp/ctl.sock".into(),
+        ];
+        let (sock, rest) = split_socket_flag(&args).unwrap();
+        assert_eq!(sock.as_deref(), Some("/tmp/ctl.sock"));
+        assert_eq!(
+            rest,
+            vec!["add", "19104", "-addr", "127.0.0.2", "-tenant", "acme"]
+        );
+    }
+
     #[test]
     fn auth_matrix() {
         assert!(authorize(
