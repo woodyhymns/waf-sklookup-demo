@@ -194,7 +194,7 @@ pub fn skip_reason(port: u16, policy: &Policy, extra_skip: &BTreeSet<u16>) -> Op
     None
 }
 
-pub fn importable_ports(listens: &BTreeSet<u16>, policy: &Policy, extra_skip: &BTreeSet<u16>) -> (Vec<u16>, Vec<(u16, String)>) {
+pub fn importable_ports(listens: &[u16], policy: &Policy, extra_skip: &BTreeSet<u16>) -> (Vec<u16>, Vec<(u16, String)>) {
     let mut accepted = Vec::new();
     let mut skipped = Vec::new();
     for port in listens {
@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(importable_listen_ports("listen 80;\nlisten 443;\nlisten 19001;"), vec![19001]);
         assert_eq!(inner_real_ports(), [80, 443, 8080, 8443].into_iter().collect());
         let policy = Policy::default();
-        let listens = [80, 443, 22, 19001].into_iter().collect();
+        let listens = [80, 443, 22, 19001];
         let (accepted, skipped) = importable_ports(&listens, &policy, &BTreeSet::new());
         assert_eq!(accepted, vec![19001]);
         assert!(skipped.iter().any(|(p, r)| *p == 80 && r.contains("reserved")));
@@ -329,14 +329,37 @@ mod tests {
         assert!(listens.contains(&19002));
         assert!(listens.contains(&18081));
         assert!(listens.contains(&18082));
+        assert!(listens.contains(&19003));
 
         let importable = importable_listen_ports_from_conf(&root).unwrap();
-        assert_eq!(importable, vec![19001, 19002, 18081, 18082]);
+        assert_eq!(importable, vec![19001, 19002, 19003, 18081, 18082]);
 
         let real = real_listen_ports_from_conf(&root).unwrap();
         assert!(real.contains(&80));
         assert!(real.contains(&443));
         assert!(!importable.iter().any(|p| real.contains(p) && [80, 443, 8080, 8443].contains(p)));
+    }
+
+    #[test]
+    fn product_fixture_import_preserves_discovery_order() {
+        let sandbox = PathBuf::from("/workspace/waf-sandbox/product-conf/nginx.conf");
+        if !sandbox.exists() {
+            return;
+        }
+        let policy = Policy::default();
+        let listens = parse_listen_ports_from_conf(&sandbox).unwrap();
+        let extra_skip = inner_real_ports();
+        let (importable, skipped) = importable_ports(&listens, &policy, &extra_skip);
+        assert_eq!(importable, vec![19001, 19002, 19003, 18081, 9000, 18082, 18443]);
+        assert_eq!(
+            skipped.iter().map(|(p, r)| format!("{p}={r}")).collect::<Vec<_>>(),
+            vec![
+                "80=reserved real bind".to_string(),
+                "443=reserved real bind".to_string(),
+                "8080=skipped real listen".to_string(),
+                "8443=skipped real listen".to_string(),
+            ]
+        );
     }
 
     #[test]

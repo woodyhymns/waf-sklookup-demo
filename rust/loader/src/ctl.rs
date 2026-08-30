@@ -147,7 +147,7 @@ fn import_binding(flags: &ParsedFlags) -> Result<PortBinding> {
 }
 
 fn ctl_import_listens(args: &[String]) -> Result<()> {
-    let flags = parse_go_flags(args, &["tls", "dry-run", "from-nginx", "help"], &["nginx-conf", "from", "tenant", "site", "cert", "policy", "ports-file", "policy-file", "freeze-file", "central-out", "metrics-file", "skip"])?;
+    let flags = parse_go_flags(args, &["tls", "dry-run", "from-nginx", "help"], &["nginx-conf", "from", "tenant", "site", "cert", "policy", "ports-file", "policy-file", "freeze-file", "central-out", "metrics-file", "skip", "pin-dir"])?;
     if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
     let binding = import_binding(&flags)?;
     let conf = flags.get("from").map(PathBuf::from).unwrap_or_else(|| nginx_conf_of(&flags));
@@ -158,7 +158,7 @@ fn ctl_import_listens(args: &[String]) -> Result<()> {
     } else {
         crate::nginx_listen::inner_real_ports()
     };
-    let listens = crate::nginx_listen::parse_listen_ports_from_conf(&conf)?.into_iter().collect();
+    let listens = crate::nginx_listen::parse_listen_ports_from_conf(&conf)?;
     let (ports, skipped_pairs) = crate::nginx_listen::importable_ports(&listens, &policy, &extra_skip);
     let skipped: Vec<String> = skipped_pairs.iter().map(|(p, r)| format!("{p}={r}")).collect();
     reject_frozen(&flags, "import-listen", &binding.tenant, &binding.site, &ports)?;
@@ -1086,7 +1086,7 @@ mod tests {
         ]);
         ctl_import_listens(&import).unwrap();
         let desired = fs::read_to_string(&ports).unwrap();
-        for port in [18081, 18082, 19001, 19002] {
+        for port in [18081, 18082, 19001, 19002, 19003] {
             assert!(desired.contains(&format!("{port} acme www")), "missing {port} in {desired}");
         }
         for port in [80, 443, 8080, 8443] {
