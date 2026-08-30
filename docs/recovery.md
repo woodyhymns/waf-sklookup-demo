@@ -58,11 +58,23 @@ master/listener is actually down, use the frontend-only
 
 ## 1. Loader kill, OOM, or abnormal exit
 
-- See: loader PID/unit is absent or failed; new external SYNs fail while the
-  inner listen still answers.
-- Recover: `sudo -E scripts/recover.sh loader`.
-- Confirm: loader and `ctl.sock` exist, pins are present, file/map agree, and
-  the helper's small probes pass. Do not migrate established connections.
+- See: loader PID/unit is absent or failed; **with maps-only pin** new external SYNs fail while the inner listen still answers.
+- **#34 product path:** `sk_lookup` is pinned at `${PIN_DIR:-/sys/fs/bpf/waf-sklookup}/sk_lookup`. Killing or crashing the loader does **not** detach the link or unpin maps; steered new SYNs keep working as long as `redir_socket` still holds live listen sockets (OpenResty up). Loader exit is intentionally non-destructive — there is no `UnpinOnDrop` on normal shutdown.
+- Recover: `sudo -E scripts/recover.sh loader` (restarts loader; reuses pinned maps and runs `bpf_link_update` on the pinned link).
+- Install teardown only: `sudo waf-sklookup-loader unpin -pin-dir /sys/fs/bpf/waf-sklookup` (detach link + remove bpffs pins).
+- Confirm: loader and `ctl.sock` exist after restart, pins include `sk_lookup` + both maps, file/map agree, and steered probes pass. Acceptance: `sudo ./scripts/accept-issue-34-kill-loader.sh`. Do not migrate established connections.
+
+### Pinned link, loader restart, OpenResty restart
+
+| Event | What stays | Loader action |
+|-------|------------|---------------|
+| Loader kill/crash | Pinned `sk_lookup` link + maps | None required for dataplane; optional `recover.sh loader` |
+| Loader restart | Same pins | Reuse maps, `bpf_link_update` on pinned link, rescan listen → SOCKMAP |
+| OpenResty restart | `open_ports` unchanged | Periodic/`SIGUSR1` rescan swaps listen inode in `redir_socket` only |
+
+Maps-only pin (no `sk_lookup` link) is the **old fail path**: kill loader → steered new SYN refuse. Do not regress.
+
+*Note: this document describes the intended product behavior; it is not a live product-box run unless you execute the scripts on hardware with sk_lookup.*
 
 ## 2. Two loaders racing for pins
 
