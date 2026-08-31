@@ -42,6 +42,7 @@ Root CLI escape hatch (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-loader retire-conf-listen PORT [-nginx-conf PATH]   # dry-run only; --apply refused
   sudo ./waf-sklookup-loader list -virtual [-nginx-conf PATH] [-ports-file ports.conf]
   sudo ./waf-sklookup-loader status|metrics [-nginx-conf PATH] [-ports-file ports.conf]
+  sudo ./waf-sklookup-loader unpin|teardown [-pin-dir DIR]   # install teardown: detach link + unpin maps
 
 Mutating commands update the desired file (default ports.conf) and the pinned map.
   Pass -no-file to edit the live map only (test/hygiene overlay; next reconcile restores the file).
@@ -75,6 +76,7 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
         "check-overlap" => ctl_check_overlap(&args[1..]),
         "retire-conf-listen" => ctl_retire_conf_listen(&args[1..]),
         "status" | "metrics" => ctl_status(&args[1..]),
+        "unpin" | "teardown" => ctl_unpin(&args[1..]),
         "help" => {
             eprint!("{CTL_USAGE}");
             Ok(())
@@ -117,6 +119,21 @@ fn ctl_rescan_listen(args: &[String]) -> Result<()> {
         &mut held,
     )?;
     println!("rescan-listen: refreshed live listen fd(s); open_ports unchanged");
+    Ok(())
+}
+
+fn ctl_unpin(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["help"], &["pin-dir"])?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
+    let dir = pin_dir_of(&flags);
+    pin::unpin_dataplane(&dir)?;
+    println!(
+        "unpin: detached sk_lookup link and removed pins under {}",
+        dir.display()
+    );
     Ok(())
 }
 
@@ -907,6 +924,8 @@ mod tests {
         assert!(parse_go_flags(&["--close-all".into(), "-freeze-file".into(), "/tmp/f".into()], &["close-all"], &["freeze-file"]).unwrap().bool_flag("close-all"));
         assert!(crate::cli::is_ctl_command("close-all"));
         assert!(crate::cli::is_ctl_command("apply-central"));
+        assert!(crate::cli::is_ctl_command("unpin"));
+        assert!(crate::cli::is_ctl_command("teardown"));
     }
 
     #[test]

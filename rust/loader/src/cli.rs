@@ -96,6 +96,8 @@ pub fn is_ctl_command(s: &str) -> bool {
             | "retire-conf-listen"
             | "status"
             | "metrics"
+            | "unpin"
+            | "teardown"
             | "help"
     )
 }
@@ -381,6 +383,8 @@ mod tests {
             "retire-conf-listen",
             "status",
             "metrics",
+            "unpin",
+            "teardown",
         ] {
             assert!(is_ctl_command(c), "{c} should be a ctl command");
         }

@@ -108,7 +108,7 @@ listen_snapshot() {
   printf 'http=%s tls=%s\n' "${primary:-none}" "${tls:-disabled}"
 }
 listen_up() { [[ "$(target_listen_inodes "${1:-$TARGET}")" != "" ]]; }
-pins_ok() { [[ -e "$PIN_DIR/open_ports" && -e "$PIN_DIR/redir_socket" ]]; }
+pins_ok() { [[ -e "$PIN_DIR/open_ports" && -e "$PIN_DIR/redir_socket" && -e "$PIN_DIR/sk_lookup" ]]; }
 bpffs_mounted() { mountpoint -q /sys/fs/bpf; }
 
 ensure_bpffs() {

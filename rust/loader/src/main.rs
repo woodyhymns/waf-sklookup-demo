@@ -189,7 +189,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         ));
         state
     };
-    let (mut bpf, _link) = load::load_and_attach(open_object, args.bpf_impl)?;
+    let mut bpf = load::load_and_attach(open_object, args.bpf_impl, &args.pin_dir)?;
     let steered: Vec<u16> = desired
         .iter()
         .filter_map(|(p, b)| (b.slot == pin::REDIR_PRIMARY as u8).then_some(*p))
@@ -200,12 +200,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         .collect();
 
     let pin_fatal = matches!(args.mode, RunMode::OpenResty);
-    let pinned = load::pin_or_warn(&mut bpf, &args.pin_dir, pin_fatal)?;
-    let _unpin = pin::UnpinOnDrop(if pinned {
-        Some(args.pin_dir.clone())
-    } else {
-        None
-    });
+    let _pinned = load::pin_or_warn(&mut bpf, &args.pin_dir, pin_fatal)?;
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let reload = Arc::new(AtomicBool::new(false));
