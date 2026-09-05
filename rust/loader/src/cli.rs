@@ -98,6 +98,10 @@ pub fn is_ctl_command(s: &str) -> bool {
             | "metrics"
             | "unpin"
             | "teardown"
+            | "upgrade"
+            | "upgrade-status"
+            | "upgrade-rollback"
+            | "detach-primary"
             | "help"
     )
 }
@@ -385,6 +389,10 @@ mod tests {
             "metrics",
             "unpin",
             "teardown",
+            "upgrade",
+            "upgrade-status",
+            "upgrade-rollback",
+            "detach-primary",
         ] {
             assert!(is_ctl_command(c), "{c} should be a ctl command");
         }

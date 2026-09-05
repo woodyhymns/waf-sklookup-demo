@@ -26,11 +26,15 @@ pub fn load_and_attach<'obj>(
     pin_dir: &Path,
 ) -> Result<LoadedBpf<'obj>> {
     bump_memlock_rlimit();
-    let bpf = match implementation {
+    let mut bpf = match implementation {
         BpfImpl::C => load_c(open_object, pin_dir)?,
         BpfImpl::Rust => load_rust(pin_dir)?,
     };
-    attach_or_upgrade_sk_lookup(&bpf, pin_dir)?;
+    std::fs::create_dir_all(pin_dir)
+        .with_context(|| format!("mkdir {}", pin_dir.display()))?;
+    ensure_backup_sk_lookup(&mut bpf, pin_dir)?;
+    attach_or_upgrade_sk_lookup(&mut bpf, pin_dir)?;
+    pin_dispatch_prog(&mut bpf, pin_dir)?;
     Ok(bpf)
 }
 
@@ -80,7 +84,7 @@ impl LoadedBpf<'_> {
         }
     }
 
-    fn attach_netns(&self, netns_fd: RawFd) -> Result<Link> {
+    fn attach_netns(&mut self, netns_fd: RawFd) -> Result<Link> {
         match self {
             Self::C(skel) => skel
                 .progs
@@ -180,9 +184,58 @@ fn load_rust<'obj>(pin_dir: &Path) -> Result<LoadedBpf<'obj>> {
     Ok(LoadedBpf::Rust(obj))
 }
 
-fn attach_or_upgrade_sk_lookup(bpf: &LoadedBpf<'_>, pin_dir: &Path) -> Result<()> {
-    std::fs::create_dir_all(pin_dir)
-        .with_context(|| format!("mkdir {}", pin_dir.display()))?;
+fn ensure_backup_sk_lookup(bpf: &mut LoadedBpf<'_>, pin_dir: &Path) -> Result<()> {
+    let backup_path = pin::sk_lookup_backup_link_path(pin_dir);
+    if backup_path.exists() {
+        crate::log_msg(format_args!(
+            "reusing pinned backup sk_lookup {}",
+            backup_path.display()
+        ));
+        return Ok(());
+    }
+    let netns = std::fs::File::open("/proc/self/ns/net").context("open netns")?;
+    let mut link = bpf.attach_netns(netns.as_raw_fd())?;
+    link.pin(&backup_path).with_context(|| {
+        format!("pin backup sk_lookup link at {}", backup_path.display())
+    })?;
+    link.disconnect();
+    crate::log_msg(format_args!(
+        "backup sk_lookup attached and pinned at {} (never updated on upgrade; survives primary detach)",
+        backup_path.display()
+    ));
+    Ok(())
+}
+
+fn pin_dispatch_prog(bpf: &mut LoadedBpf<'_>, pin_dir: &Path) -> Result<()> {
+    let path = pin::prog_path(pin_dir);
+    if path.exists() {
+        crate::log_msg(format_args!("reusing pinned program {}", path.display()));
+        return Ok(());
+    }
+    match bpf {
+        LoadedBpf::C(skel) => skel
+            .progs
+            .dispatch
+            .pin(&path)
+            .with_context(|| format!("pin {}", path.display()))?,
+        LoadedBpf::Rust(obj) => {
+            let mut dispatch = obj
+                .progs_mut()
+                .find(|p| p.name() == "dispatch")
+                .context("Rust BPF object missing program dispatch")?;
+            dispatch
+                .pin(&path)
+                .with_context(|| format!("pin {}", path.display()))?;
+        }
+    }
+    crate::log_msg(format_args!(
+        "pinned dispatch program at {} (SDD-003 rollback FD)",
+        path.display()
+    ));
+    Ok(())
+}
+
+fn attach_or_upgrade_sk_lookup(bpf: &mut LoadedBpf<'_>, pin_dir: &Path) -> Result<()> {
     let link_path = pin::sk_lookup_link_path(pin_dir);
     if link_path.exists() {
         let mut link = Link::open(&link_path)

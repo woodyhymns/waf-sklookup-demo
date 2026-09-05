@@ -17,6 +17,7 @@ mod policy;
 mod ports;
 mod sockctl;
 mod toy;
+mod upgrade;
 
 #[allow(clippy::wildcard_imports, dead_code, unused_imports, non_snake_case)]
 mod dispatch {
