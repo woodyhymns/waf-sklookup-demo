@@ -108,6 +108,7 @@ sudo waf-sklookup-loader detach-primary [-pin-dir DIR]
 | T-032 | Missing/unreadable candidate leaves link untouched | unit + accept script |
 | T-033 | `bpf_link_update` upgrade, steered SYN still 200 | `scripts/accept-sdd003-upgrade-rollback.sh` |
 | T-034 | Health-fail rolls back; SYN still 200 | same script, `WAF_UPGRADE_FAIL_HEALTH=1` |
+| T-034a | Accept script exit 0 on criteria PASS (no ERR/hygiene false fail) | `tests/hygiene-trap-status.sh` |
 | T-040 | Kill loader, new SYN still 200 (#38 pin-link) | `scripts/accept-issue-34-kill-loader.sh` |
 | T-041 | Detach primary, new SYN still 200; established TCP stays | `scripts/accept-issue-34-detach-primary.sh` |
 
