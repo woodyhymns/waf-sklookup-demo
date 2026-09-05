@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 
 /// Listen socket captured from a non-loader process, plus a pidfd for that owner.
+#[derive(Debug)]
 pub struct CapturedListen {
     pub inode: u64,
     pub fd: OwnedFd,
