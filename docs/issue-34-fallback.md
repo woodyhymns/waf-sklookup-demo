@@ -47,8 +47,10 @@ Health-window fault injection (tests only): `WAF_UPGRADE_FAIL_HEALTH=1`.
 
 ## How Test re-runs the scenarios
 
-Needs root/CAP_BPF, `sk_lookup`, and the OpenResty demo stack. Hygiene traps
-unload maps and stop the loader; do not leave BPF occupied.
+Needs root/CAP_BPF, `sk_lookup`, and the OpenResty demo stack. Hygiene runs on
+EXIT (not ERR) so expected-fail upgrade steps cannot teardown mid-run or
+rewrite a criteria PASS. After the script exits, maps/loader are unloaded;
+do not leave BPF occupied.
 
 ```bash
 # #38: kill loader; new SYN still 200 while the primary link is pinned

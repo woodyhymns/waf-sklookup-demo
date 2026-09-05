@@ -4,6 +4,7 @@
 #
 # Re-run:
 #   sudo ./scripts/accept-sdd003-upgrade-rollback.sh
+# Trap/hygiene regression (no BPF): ./tests/hygiene-trap-status.sh
 #
 # Builds a candidate from dispatch.bpf.c (u16 open_ports, 2-slot SOCKMAP).
 # Does not use #37 objects.
@@ -11,6 +12,8 @@ set -euo pipefail
 source "$(dirname "$0")/lib-prod-gng.sh"
 
 STARTED_HERE=0
+# Hygiene is EXIT-only. Missing-obj / WAF_UPGRADE_FAIL_HEALTH=1 are expected
+# non-zero; those statuses are checked explicitly below (do not trap ERR).
 install_hygiene_traps
 
 require_root() {

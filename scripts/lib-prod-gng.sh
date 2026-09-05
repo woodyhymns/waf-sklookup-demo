@@ -58,16 +58,23 @@ demo_stop() {
 
 # Idempotent, unconditional test cleanup.  Do not key this on STARTED_HERE: a
 # previous/parallel failed test may own the surviving processes or map entries.
+#
+# EXIT-only (not ERR). Bash still runs an ERR trap under `set +e`. If cleanup
+# then restores `set -e` and `return`s the failed command's status, the caller
+# aborts — a false fail when an accept script expects a CLI to fail (SDD-003
+# missing-obj / health-rollback). EXIT already runs on `set -e` and `exit`.
 HYGIENE_CLEANING=0
 hygiene_cleanup() {
   local rc=$?
+  # Teardown must not rewrite criteria status or re-enable errexit in the caller.
+  trap - ERR
+  set +e
   [[ "$HYGIENE_CLEANING" -eq 1 ]] && return "$rc"
   HYGIENE_CLEANING=1
   if [[ "${HYGIENE_DRY_RUN:-0}" == "1" ]]; then
     echo "HYGIENE_DRY_RUN: would close map entries, stop both loaders, detach/unpin BPF, stop OpenResty, and docker compose down"
     return "$rc"
   fi
-  set +e
 
   # Close every possible test/fill range while the pinned map is still usable.
   # The demo's default ports are included intentionally: final cleanup is a
@@ -82,12 +89,11 @@ hygiene_cleanup() {
     sudo find "$PIN_DIR" -mindepth 1 -maxdepth 1 -delete >/dev/null 2>&1 || true
     sudo rmdir "$PIN_DIR" >/dev/null 2>&1 || true
   fi
-  set -e
   return "$rc"
 }
 
 install_hygiene_traps() {
-  trap 'hygiene_cleanup' EXIT ERR
+  trap 'hygiene_cleanup' EXIT
   trap 'hygiene_cleanup; exit 130' INT
   trap 'hygiene_cleanup; exit 131' QUIT
   trap 'hygiene_cleanup; exit 143' TERM
