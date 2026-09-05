@@ -42,7 +42,10 @@ Root CLI escape hatch (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-loader retire-conf-listen PORT [-nginx-conf PATH]   # dry-run only; --apply refused
   sudo ./waf-sklookup-loader list -virtual [-nginx-conf PATH] [-ports-file ports.conf]
   sudo ./waf-sklookup-loader status|metrics [-nginx-conf PATH] [-ports-file ports.conf]
-  sudo ./waf-sklookup-loader unpin|teardown [-pin-dir DIR]   # install teardown: detach link + unpin maps
+  sudo ./waf-sklookup-loader unpin|teardown [-pin-dir DIR]   # install teardown: detach both links + unpin maps
+  sudo ./waf-sklookup-loader upgrade -obj PATH [-pin-dir DIR] [-health-window 1s]
+  sudo ./waf-sklookup-loader upgrade-status|upgrade-rollback [-pin-dir DIR]
+  sudo ./waf-sklookup-loader detach-primary [-pin-dir DIR]   # test/ops: drop primary link; backup steers new SYNs
 
 Mutating commands update the desired file (default ports.conf) and the pinned map.
   Pass -no-file to edit the live map only (test/hygiene overlay; next reconcile restores the file).
@@ -77,6 +80,10 @@ pub fn run_ctl(args: &[String]) -> Result<()> {
         "retire-conf-listen" => ctl_retire_conf_listen(&args[1..]),
         "status" | "metrics" => ctl_status(&args[1..]),
         "unpin" | "teardown" => ctl_unpin(&args[1..]),
+        "upgrade" => ctl_upgrade(&args[1..]),
+        "upgrade-status" => ctl_upgrade_status(&args[1..]),
+        "upgrade-rollback" => ctl_upgrade_rollback(&args[1..]),
+        "detach-primary" => ctl_detach_primary(&args[1..]),
         "help" => {
             eprint!("{CTL_USAGE}");
             Ok(())
@@ -131,8 +138,64 @@ fn ctl_unpin(args: &[String]) -> Result<()> {
     let dir = pin_dir_of(&flags);
     pin::unpin_dataplane(&dir)?;
     println!(
-        "unpin: detached sk_lookup link and removed pins under {}",
+        "unpin: detached primary+backup sk_lookup links and removed pins under {}",
         dir.display()
+    );
+    Ok(())
+}
+
+fn ctl_upgrade(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["help"], &["obj", "pin-dir", "health-window"])?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
+    let obj = flags
+        .get("obj")
+        .map(PathBuf::from)
+        .context("upgrade requires -obj PATH (ABI-compatible BPF ELF)")?;
+    let window = crate::cli::parse_duration(flags.get("health-window").unwrap_or("1s"))
+        .context("bad -health-window")?;
+    let dir = pin_dir_of(&flags);
+    let journal = crate::upgrade::activate(&dir, &obj, window)?;
+    println!("{}", serde_json::to_string_pretty(&journal)?);
+    Ok(())
+}
+
+fn ctl_upgrade_status(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["help"], &["pin-dir"])?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
+    let v = crate::upgrade::status(&pin_dir_of(&flags))?;
+    println!("{}", serde_json::to_string_pretty(&v)?);
+    Ok(())
+}
+
+fn ctl_upgrade_rollback(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["help"], &["pin-dir"])?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
+    let journal = crate::upgrade::rollback(&pin_dir_of(&flags))?;
+    println!("{}", serde_json::to_string_pretty(&journal)?);
+    Ok(())
+}
+
+fn ctl_detach_primary(args: &[String]) -> Result<()> {
+    let flags = parse_go_flags(args, &["help"], &["pin-dir"])?;
+    if maybe_help(&flags) {
+        eprint!("{CTL_USAGE}");
+        return Ok(());
+    }
+    let dir = pin_dir_of(&flags);
+    pin::detach_primary_link(&dir)?;
+    println!(
+        "detach-primary: removed {}; backup {} still attached",
+        pin::sk_lookup_link_path(&dir).display(),
+        pin::sk_lookup_backup_link_path(&dir).display()
     );
     Ok(())
 }
@@ -925,6 +988,10 @@ mod tests {
         assert!(crate::cli::is_ctl_command("apply-central"));
         assert!(crate::cli::is_ctl_command("unpin"));
         assert!(crate::cli::is_ctl_command("teardown"));
+        assert!(crate::cli::is_ctl_command("upgrade"));
+        assert!(crate::cli::is_ctl_command("upgrade-status"));
+        assert!(crate::cli::is_ctl_command("upgrade-rollback"));
+        assert!(crate::cli::is_ctl_command("detach-primary"));
     }
 
     #[test]

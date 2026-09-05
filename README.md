@@ -188,6 +188,26 @@ sudo ./rust/loader/target/release/waf-sklookup-loader list
 # legacy: -mode close-port | open-port | dump-ports
 ```
 
+## Fallback when BPF is upgraded or the primary link is gone (#34 leftover)
+
+Pin-link (#38) is the first cut: killing the loader does **not** detach
+`sk_lookup`, so new SYNs to virtual ports keep steering while OpenResty
+listens. This tree also pins a **backup** `sk_lookup` and offers a
+transactional `upgrade` that uses `bpf_link_update` (no empty-program
+window) plus rollback if the candidate fails verify/attach/health.
+
+Established TCP never migrates. Only new SYNs are in scope. This is the
+**main ABI** (u16 `open_ports`, 2-slot SOCKMAP), not the #37 experiment bay.
+
+Details and Test re-run commands: [docs/issue-34-fallback.md](docs/issue-34-fallback.md),
+[docs/specs/SDD-003-atomic-upgrade-and-rollback.md](docs/specs/SDD-003-atomic-upgrade-and-rollback.md).
+
+```bash
+sudo ./scripts/accept-issue-34-kill-loader.sh
+sudo ./scripts/accept-issue-34-detach-primary.sh
+sudo ./scripts/accept-sdd003-upgrade-rollback.sh
+```
+
 ## Troubleshooting
 
 | Symptom | Likely cause |
@@ -215,6 +235,11 @@ sudo ./rust/loader/target/release/waf-sklookup-loader list
 | `run-openresty-demo.sh` | Start/verify/stop OpenResty demo (HTTP + stock TLS fallback) |
 | `deploy/systemd/`, `docs/systemd.md` | Operator systemd units, environment examples, fail-closed policy, and installation guide |
 | `scripts/check-install.sh` | Read-only kernel, BPF, bpffs, privilege, loader, and OpenResty installation checks |
+| `docs/issue-34-fallback.md` | #34 leftover: pin-link, backup `sk_lookup`, SDD-003 upgrade/rollback |
+| `docs/specs/SDD-003-atomic-upgrade-and-rollback.md` | Main-ABI upgrade transaction (not #37) |
+| `scripts/accept-issue-34-kill-loader.sh` | Kill loader; new SYN still 200 |
+| `scripts/accept-issue-34-detach-primary.sh` | Detach primary; backup steers; established TCP stays |
+| `scripts/accept-sdd003-upgrade-rollback.sh` | `bpf_link_update` commit + health rollback |
 | `docs/openresty-m1.md` | M1 HTTP wiring |
 | `docs/openresty-m2.md` | M2 control plane: add/remove/list/bulk, M3 seed |
 | `docs/openresty-p1.md` | P1 TLS product model, stock vs Tengine, header flag |

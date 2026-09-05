@@ -715,6 +715,7 @@ dependencies = [
  "anyhow",
  "libbpf-cargo",
  "libbpf-rs",
+ "libbpf-sys",
  "libc",
  "serde",
  "serde_json",

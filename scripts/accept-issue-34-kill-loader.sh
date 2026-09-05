@@ -36,6 +36,11 @@ STARTED_HERE=1
   ls -la "$PIN_DIR" 2>/dev/null || true
   exit 1
 }
+[[ -e "$PIN_DIR/sk_lookup_backup" ]] || {
+  echo "FAIL: backup sk_lookup pin missing at $PIN_DIR/sk_lookup_backup" >&2
+  ls -la "$PIN_DIR" 2>/dev/null || true
+  exit 1
+}
 
 echo "--- baseline steered curl (expect 200) ---"
 curl -sS --max-time 5 "http://${HOST}:${PORT}/" | tee /tmp/issue34-base.body
@@ -52,7 +57,7 @@ rm -f "$STATE_DIR/loader.pid"
 
 echo "--- pin dir after kill (link + maps must remain) ---"
 ls -la "$PIN_DIR"
-[[ -e "$PIN_DIR/sk_lookup" && -e "$PIN_DIR/open_ports" && -e "$PIN_DIR/redir_socket" ]]
+[[ -e "$PIN_DIR/sk_lookup" && -e "$PIN_DIR/sk_lookup_backup" && -e "$PIN_DIR/open_ports" && -e "$PIN_DIR/redir_socket" ]]
 
 echo "--- steered curl after loader kill (expect 200, not refuse) ---"
 set +e
