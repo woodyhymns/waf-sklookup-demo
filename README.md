@@ -202,11 +202,23 @@ Established TCP never migrates. Only new SYNs are in scope. This is the
 Details and Test re-run commands: [docs/issue-34-fallback.md](docs/issue-34-fallback.md),
 [docs/specs/SDD-003-atomic-upgrade-and-rollback.md](docs/specs/SDD-003-atomic-upgrade-and-rollback.md).
 
+Optional **last-resort nft DNAT** (SDD-004) is default **OFF** and is never
+started by the loader. Use it only after **both** links are gone:
+
+```bash
+sudo ./scripts/nft-dnat-fallback.sh enable --enable
+sudo ./scripts/nft-dnat-fallback.sh disable
+```
+
 ```bash
 sudo ./scripts/accept-issue-34-kill-loader.sh
 sudo ./scripts/accept-issue-34-detach-primary.sh
 sudo ./scripts/accept-sdd003-upgrade-rollback.sh
+# nft present → PASS; nft absent → SKIP 77
+sudo ./scripts/accept-nft-dnat-fallback.sh
 ```
+
+Details: [docs/nft-dnat-fallback.md](docs/nft-dnat-fallback.md).
 
 ## Troubleshooting
 
@@ -236,10 +248,14 @@ sudo ./scripts/accept-sdd003-upgrade-rollback.sh
 | `deploy/systemd/`, `docs/systemd.md` | Operator systemd units, environment examples, fail-closed policy, and installation guide |
 | `scripts/check-install.sh` | Read-only kernel, BPF, bpffs, privilege, loader, and OpenResty installation checks |
 | `docs/issue-34-fallback.md` | #34 leftover: pin-link, backup `sk_lookup`, SDD-003 upgrade/rollback |
+| `docs/nft-dnat-fallback.md` | SDD-004 last-resort nft DNAT (default OFF) |
 | `docs/specs/SDD-003-atomic-upgrade-and-rollback.md` | Main-ABI upgrade transaction (not #37) |
+| `docs/specs/SDD-004-nft-dnat-last-resort.md` | Optional nft when both `sk_lookup` links are gone |
+| `scripts/nft-dnat-fallback.sh` | Enable/disable/status/render for last-resort DNAT |
 | `scripts/accept-issue-34-kill-loader.sh` | Kill loader; new SYN still 200 |
 | `scripts/accept-issue-34-detach-primary.sh` | Detach primary; backup steers; established TCP stays |
 | `scripts/accept-sdd003-upgrade-rollback.sh` | `bpf_link_update` commit + health rollback |
+| `scripts/accept-nft-dnat-fallback.sh` | nft present → PASS; nft absent → SKIP 77 |
 | `docs/openresty-m1.md` | M1 HTTP wiring |
 | `docs/openresty-m2.md` | M2 control plane: add/remove/list/bulk, M3 seed |
 | `docs/openresty-p1.md` | P1 TLS product model, stock vs Tengine, header flag |

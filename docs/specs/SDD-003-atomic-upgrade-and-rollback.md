@@ -17,7 +17,8 @@ When BPF/`sk_lookup` is upgraded or partially fails, traffic must not break:
 - **Rollback** if the candidate fails verify, attach, pin, or the health window.
 - **Second line:** a separately pinned backup `sk_lookup` stays attached when
   the primary link is detached, and still steers new SYNs for ports in
-  `open_ports` to the existing listen. nftables is out of scope.
+  `open_ports` to the existing listen. nftables is **not** this second
+  line; see [SDD-004](SDD-004-nft-dnat-last-resort.md) (last-resort, default OFF).
 
 Pin-link + `bpf_link_update` on loader restart already landed in #38. This SDD
 adds a transactional upgrade CLI and the backup link.
@@ -117,6 +118,6 @@ sudo waf-sklookup-loader detach-primary [-pin-dir DIR]
 - Cherry-pick or merge #37
 - Change product identity to `$waf_external_port` (Host/SNI stays policy)
 - Revive `ngx.req.socket(true)` / getfd body-stripping
-- nftables second line
+- nftables as a second line (that is SDD-004, last line only, default OFF)
 - Cross-node rollout
 - Semantic map migration
