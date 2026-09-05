@@ -64,7 +64,7 @@ mkdir -p "$WORK" "$PIN_DIR"
 printf 'listen %s;\n' "$LISTEN_PORT" >"$NGINX_CONF"
 cat > "$POLICY_FILE" <<'EOF'
 deny=22,25,53,3306,6379
-reserve=80,443,8080,8443
+reserve=80,443,8080,8443,19099
 allow_privileged=
 max_ports_per_tenant=32
 max_ports_per_machine=128
@@ -148,16 +148,21 @@ echo "--- baseline steered curl ---"
 curl -sS --max-time 3 "http://127.0.0.1:${STEER_PORT}/" | tee "$WORK/base.body"
 grep -q "pidfd-ok" "$WORK/base.body"
 
-echo "--- reserve= refuses inner listen ---"
-if "$LOADER_BIN" add 8080 -tenant demo -site local \
+echo "--- reserve= refuses non-inner reserved port ---"
+# 8080 is also an inner real listen; overlap fails first. 19099 is reserve-only.
+if "$LOADER_BIN" add 19099 -tenant demo -site local \
     -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" -policy-file "$POLICY_FILE" \
     -nginx-conf "$NGINX_CONF" \
     >"$WORK/reserve.out" 2>"$WORK/reserve.err"; then
-  echo "FAIL: add 8080 should be reserved" >&2
-  cat "$WORK/reserve.err" >&2
+  echo "FAIL: add 19099 should be reserved" >&2
+  cat "$WORK/reserve.out" "$WORK/reserve.err" >&2
   exit 1
 fi
-grep -q reserved "$WORK/reserve.err"
+if ! grep -q reserved "$WORK/reserve.err" "$WORK/reserve.out"; then
+  echo "FAIL: reserve reject did not mention reserved" >&2
+  cat "$WORK/reserve.out" "$WORK/reserve.err" >&2
+  exit 1
+fi
 echo "reserve reject: $(tr '\n' ' ' < "$WORK/reserve.err")"
 
 echo "--- kill worker (loader dup may still look LISTEN) ---"
