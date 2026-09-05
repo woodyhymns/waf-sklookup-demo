@@ -60,16 +60,20 @@ master/listener is actually down, use the frontend-only
 
 - See: loader PID/unit is absent or failed; **with maps-only pin** new external SYNs fail while the inner listen still answers.
 - **#34 product path:** `sk_lookup` is pinned at `${PIN_DIR:-/sys/fs/bpf/waf-sklookup}/sk_lookup`. Killing or crashing the loader does **not** detach the link or unpin maps; steered new SYNs keep working as long as `redir_socket` still holds live listen sockets (OpenResty up). Loader exit is intentionally non-destructive — there is no `UnpinOnDrop` on normal shutdown.
-- Recover: `sudo -E scripts/recover.sh loader` (restarts loader; reuses pinned maps and runs `bpf_link_update` on the pinned link).
-- Install teardown only: `sudo waf-sklookup-loader unpin -pin-dir /sys/fs/bpf/waf-sklookup` (detach link + remove bpffs pins).
-- Confirm: loader and `ctl.sock` exist after restart, pins include `sk_lookup` + both maps, file/map agree, and steered probes pass. Acceptance: `sudo ./scripts/accept-issue-34-kill-loader.sh`. Do not migrate established connections.
+- **Backup link:** `sk_lookup_backup` is pinned once and never `bpf_link_update`d during SDD-003 upgrade. If the primary link is detached (`detach-primary` or an accidental primary unlink), new SYNs for `open_ports` still assign the existing listen. Established TCP is not migrated.
+- **SDD-003 upgrade:** `waf-sklookup-loader upgrade -obj FILE` replaces only the primary program via `bpf_link_update`. Verify/attach/health failure rolls back to the previous pinned program. Journal: `/run/waf-sklookup/upgrades/`. Main ABI only (u16 key, 2-slot SOCKMAP) — not the #37 dest-key/shard ABI.
+- Recover: `sudo -E scripts/recover.sh loader` (restarts loader; reuses pinned maps and runs `bpf_link_update` on the pinned **primary** link; backup pin is reused as-is).
+- Install teardown only: `sudo waf-sklookup-loader unpin -pin-dir /sys/fs/bpf/waf-sklookup` (detach **both** links + remove bpffs pins).
+- Confirm: loader and `ctl.sock` exist after restart, pins include `sk_lookup` + `sk_lookup_backup` + both maps, file/map agree, and steered probes pass. Acceptance: `sudo ./scripts/accept-issue-34-kill-loader.sh`, `sudo ./scripts/accept-issue-34-detach-primary.sh`, `sudo ./scripts/accept-sdd003-upgrade-rollback.sh`. See [issue-34-fallback.md](issue-34-fallback.md). Do not migrate established connections.
 
 ### Pinned link, loader restart, OpenResty restart
 
 | Event | What stays | Loader action |
 |-------|------------|---------------|
-| Loader kill/crash | Pinned `sk_lookup` link + maps | None required for dataplane; optional `recover.sh loader` |
-| Loader restart | Same pins | Reuse maps, `bpf_link_update` on pinned link, rescan listen → SOCKMAP |
+| Loader kill/crash | Pinned primary + backup `sk_lookup` links + maps | None required for dataplane; optional `recover.sh loader` |
+| Loader restart | Same pins | Reuse maps, `bpf_link_update` on **primary** only, backup reused, rescan listen → SOCKMAP |
+| Primary link detached | Backup link + maps | New SYNs still steered; established TCP stays |
+| `upgrade -obj` | Maps + backup | `bpf_link_update` primary; rollback on verify/attach/health fail |
 | OpenResty restart | `open_ports` unchanged | Periodic/`SIGUSR1` rescan swaps listen inode in `redir_socket` only |
 
 Maps-only pin (no `sk_lookup` link) is the **old fail path**: kill loader → steered new SYN refuse. Do not regress.
