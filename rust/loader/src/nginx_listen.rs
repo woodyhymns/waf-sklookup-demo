@@ -186,6 +186,54 @@ pub fn real_listen_ports_from_conf(path: &Path) -> Result<BTreeSet<u16>> {
     Ok(out)
 }
 
+/// One `listen` line found after the same include walk `import-listens` uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListenHit {
+    pub path: PathBuf,
+    pub line_no: usize,
+    pub text: String,
+    pub ports: Vec<u16>,
+}
+
+impl ListenHit {
+    pub fn display_line(&self, root_conf: &Path) -> String {
+        format!("{}:{}: {}", conf_relative_path(root_conf, &self.path), self.line_no, self.text)
+    }
+}
+
+/// Path of `file` relative to the directory that contains `root_conf` (the nginx entry file).
+pub fn conf_relative_path(root_conf: &Path, file: &Path) -> String {
+    let base = root_conf.parent().unwrap_or_else(|| Path::new("."));
+    let file_abs = fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    let base_abs = fs::canonicalize(base).unwrap_or_else(|_| base.to_path_buf());
+    file_abs
+        .strip_prefix(&base_abs)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| file.display().to_string())
+}
+
+/// Locate `listen` lines for `wanted` ports across the expanded include tree.
+pub fn find_listen_hits(root: &Path, wanted: &BTreeSet<u16>) -> Result<Vec<ListenHit>> {
+    let mut out = Vec::new();
+    for (path, text) in read_expanded_files(root)? {
+        for (idx, line) in text.lines().enumerate() {
+            let ports: Vec<u16> = parse_listen_ports(line)
+                .into_iter()
+                .filter(|p| wanted.contains(p))
+                .collect();
+            if !ports.is_empty() {
+                out.push(ListenHit {
+                    path: path.clone(),
+                    line_no: idx + 1,
+                    text: line.to_string(),
+                    ports,
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
 pub fn skip_reason(port: u16, policy: &Policy, extra_skip: &BTreeSet<u16>) -> Option<&'static str> {
     if port == 80 || port == 443 { return Some("reserved real bind"); }
     if extra_skip.contains(&port) { return Some("skipped real listen"); }
@@ -330,9 +378,11 @@ mod tests {
         assert!(listens.contains(&18081));
         assert!(listens.contains(&18082));
         assert!(listens.contains(&19003));
+        assert!(listens.contains(&9000));
+        assert!(listens.contains(&18443));
 
         let importable = importable_listen_ports_from_conf(&root).unwrap();
-        assert_eq!(importable, vec![19001, 19002, 19003, 18081, 18082]);
+        assert_eq!(importable, vec![19001, 19002, 19003, 18081, 9000, 18082, 18443]);
 
         let real = real_listen_ports_from_conf(&root).unwrap();
         assert!(real.contains(&80));
@@ -360,6 +410,42 @@ mod tests {
                 "8443=skipped real listen".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn find_listen_hits_locates_nested_and_glob_includes() {
+        let root = issue30_fixture_root();
+        let wanted = [19003, 19001, 18081, 9000, 18443].into_iter().collect();
+        let hits = find_listen_hits(&root, &wanted).unwrap();
+        let by_port = |p| hits.iter().find(|h| h.ports.contains(&p)).unwrap();
+
+        let nested = by_port(19003);
+        assert!(conf_relative_path(&root, &nested.path).ends_with("conf.d/nested/more.conf"));
+        assert!(nested.text.contains("19003"));
+
+        let extra = by_port(19001);
+        assert!(conf_relative_path(&root, &extra.path).ends_with("conf.d/extra-listens.conf"));
+
+        let tenant = by_port(18081);
+        assert!(conf_relative_path(&root, &tenant.path).ends_with("sites-enabled/tenant.conf"));
+        assert!(by_port(9000).text.contains("9000"));
+        assert!(by_port(18443).text.contains("18443"));
+    }
+
+    #[test]
+    fn overlap_and_retire_hits_match_importable_expansion() {
+        let root = issue30_fixture_root();
+        let importable = importable_listen_ports_from_conf(&root).unwrap();
+        let wanted: BTreeSet<u16> = importable.iter().copied().collect();
+        let hits = find_listen_hits(&root, &wanted).unwrap();
+        let from_hits: BTreeSet<u16> = hits.iter().flat_map(|h| h.ports.iter().copied()).collect();
+        assert_eq!(from_hits, wanted);
+
+        let real = real_listen_ports_from_conf(&root).unwrap();
+        let overlapping = conflicts(&real, wanted.iter().copied());
+        let mut expected = importable.clone();
+        expected.sort_unstable();
+        assert_eq!(overlapping, expected);
     }
 
     #[test]

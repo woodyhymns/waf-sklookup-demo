@@ -262,10 +262,20 @@ fn ctl_migrate(args: &[String]) -> Result<()> {
 fn ctl_check_overlap(args: &[String]) -> Result<()> {
     let flags = parse_go_flags(args, &["help"], &["nginx-conf", "ports-file", "policy-file", "pin-dir"])?;
     if maybe_help(&flags) { eprint!("{CTL_USAGE}"); return Ok(()); }
+    let conf = nginx_conf_of(&flags);
     let desired = desired_or_empty(&ports_file_of(&flags), &policy_file_of(&flags))?;
     let (map, _) = map_if_available(&pin_dir_of(&flags));
-    let conflicts = overlap(&real_ports(&nginx_conf_of(&flags))?, &desired, &map, &[]);
-    if conflicts.is_empty() { println!("overlap: none"); Ok(()) } else { bail!("overlapping ports: {conflicts:?}") }
+    let conflicts = overlap(&real_ports(&conf)?, &desired, &map, &[]);
+    if conflicts.is_empty() {
+        println!("overlap: none");
+        return Ok(());
+    }
+    let wanted: BTreeSet<u16> = conflicts.iter().copied().collect();
+    let detail = format_listen_hits(&conf, &crate::nginx_listen::find_listen_hits(&conf, &wanted)?);
+    if detail.is_empty() {
+        bail!("overlapping ports: {conflicts:?}");
+    }
+    bail!("overlapping ports: {conflicts:?}\n{detail}")
 }
 
 fn ctl_retire_conf_listen(args: &[String]) -> Result<()> {
@@ -282,16 +292,20 @@ fn ctl_retire_conf_listen(args: &[String]) -> Result<()> {
         for spec in &flags.args { set.extend(crate::ports::parse_port_list_flexible(spec)?); }
         set
     };
-    let mut found = false;
-    for (_, text) in crate::nginx_listen::read_expanded_files(&conf)? {
-        for line in text.lines() {
-            let ports = crate::nginx_listen::parse_listen_ports(line);
-            if ports.iter().any(|p| wanted.contains(p)) { println!("{line}"); found = true; }
-        }
+    let hits = crate::nginx_listen::find_listen_hits(&conf, &wanted)?;
+    let report = format_listen_hits(&conf, &hits);
+    if report.is_empty() {
+        println!("no nginx listen line found for requested ports");
+    } else {
+        println!("{report}");
     }
-    if !found { println!("no nginx listen line found for requested ports"); }
     println!("migrate --drop-listen is dry-run only; edit nginx manually then reload");
     Ok(())
+}
+
+/// Shared include-expanded listen report used by check-overlap and retire-conf-listen.
+fn format_listen_hits(root_conf: &Path, hits: &[crate::nginx_listen::ListenHit]) -> String {
+    hits.iter().map(|h| h.display_line(root_conf)).collect::<Vec<_>>().join("\n")
 }
 
 pub(crate) fn status_value(nginx_conf: &Path, ports_file: &Path, policy_file: &Path, pin_dir: &Path, freeze_file: &Path, metrics_file: &Path) -> Result<serde_json::Value> {
@@ -1157,7 +1171,7 @@ mod tests {
         ]);
         ctl_import_listens(&import).unwrap();
         let desired = fs::read_to_string(&ports).unwrap();
-        for port in [18081, 18082, 19001, 19002, 19003] {
+        for port in [18081, 18082, 19001, 19002, 19003, 9000, 18443] {
             assert!(desired.contains(&format!("{port} acme www")), "missing {port} in {desired}");
         }
         for port in [80, 443, 8080, 8443] {
@@ -1174,5 +1188,90 @@ mod tests {
         assert!(err.contains("dry-run"));
         assert_eq!(fs::read(&nginx).unwrap(), before);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn issue30_nginx() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/issue-30-product-nginx/nginx.conf")
+    }
+
+    fn issue30_tree_snapshot() -> Vec<(PathBuf, Vec<u8>)> {
+        let root = issue30_nginx().parent().unwrap().to_path_buf();
+        [
+            root.join("nginx.conf"),
+            root.join("conf.d/extra-listens.conf"),
+            root.join("conf.d/nested/more.conf"),
+            root.join("sites-enabled/tenant.conf"),
+        ]
+        .into_iter()
+        .map(|p| (p.clone(), fs::read(&p).unwrap()))
+        .collect()
+    }
+
+    fn assert_issue30_tree_unchanged(before: &[(PathBuf, Vec<u8>)]) {
+        for (path, bytes) in before {
+            assert_eq!(fs::read(path).unwrap(), *bytes, "fixture mutated: {}", path.display());
+        }
+    }
+
+    #[test]
+    fn issue30_check_overlap_fail_closed_on_nested_include_desired() {
+        let (_dir, ports, policy, _nginx, _pin, _metrics) = fixture();
+        let nginx = issue30_nginx();
+        let snapshot = issue30_tree_snapshot();
+        let args = strings(&[
+            "-nginx-conf", nginx.to_str().unwrap(),
+            "-ports-file", ports.to_str().unwrap(),
+            "-policy-file", policy.to_str().unwrap(),
+        ]);
+
+        fs::write(&ports, "# desired open_ports\n").unwrap();
+        ctl_check_overlap(&args).unwrap();
+
+        fs::write(&ports, "# desired open_ports\n19003 acme www\n").unwrap();
+        let err = ctl_check_overlap(&args).unwrap_err().to_string();
+        assert!(err.contains("overlapping ports"));
+        assert!(err.contains("19003"));
+        assert!(err.contains("conf.d/nested/more.conf"));
+
+        fs::write(&ports, "# desired open_ports\n18081 acme www\n9000 acme www\n").unwrap();
+        let err = ctl_check_overlap(&args).unwrap_err().to_string();
+        assert!(err.contains("18081"));
+        assert!(err.contains("9000"));
+        assert!(err.contains("sites-enabled/tenant.conf"));
+        assert_issue30_tree_unchanged(&snapshot);
+    }
+
+    #[test]
+    fn issue30_retire_conf_listen_prints_nested_include_lines() {
+        let nginx = issue30_nginx();
+        let snapshot = issue30_tree_snapshot();
+
+        let nested = crate::nginx_listen::find_listen_hits(&nginx, &[19003].into_iter().collect()).unwrap();
+        assert_eq!(nested.len(), 1);
+        let nested_line = nested[0].display_line(&nginx);
+        assert!(nested_line.contains("conf.d/nested/more.conf"));
+        assert!(nested_line.contains("19003"));
+
+        let glob = crate::nginx_listen::find_listen_hits(&nginx, &[19001, 19002].into_iter().collect()).unwrap();
+        assert!(glob.iter().any(|h| h.display_line(&nginx).contains("conf.d/extra-listens.conf") && h.text.contains("19001")));
+        assert!(glob.iter().any(|h| h.text.contains("19002")));
+
+        let importable: BTreeSet<u16> = crate::nginx_listen::importable_listen_ports_from_conf(&nginx).unwrap().into_iter().collect();
+        let all = crate::nginx_listen::find_listen_hits(&nginx, &importable).unwrap();
+        let report = format_listen_hits(&nginx, &all);
+        for port in [19001, 19002, 19003, 18081, 9000, 18082, 18443] {
+            assert!(report.contains(&port.to_string()), "missing {port} in {report}");
+        }
+        assert!(report.contains("conf.d/nested/more.conf"));
+        assert!(report.contains("conf.d/extra-listens.conf"));
+        assert!(report.contains("sites-enabled/tenant.conf"));
+
+        ctl_retire_conf_listen(&strings(&["-nginx-conf", nginx.to_str().unwrap(), "19003"])).unwrap();
+        ctl_retire_conf_listen(&strings(&["-nginx-conf", nginx.to_str().unwrap()])).unwrap();
+        let err = ctl_retire_conf_listen(&strings(&["--apply", "-nginx-conf", nginx.to_str().unwrap(), "19003"])).unwrap_err().to_string();
+        assert!(err.contains("dry-run"));
+        let err = ctl_migrate(&strings(&["--drop-listen", "--apply", "-nginx-conf", nginx.to_str().unwrap(), "19003"])).unwrap_err().to_string();
+        assert!(err.contains("dry-run"));
+        assert_issue30_tree_unchanged(&snapshot);
     }
 }
