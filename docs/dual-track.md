@@ -23,11 +23,11 @@ When the machine is frozen, import/migrate that would mutate desired state is re
 
 ## Conflict detection
 
-A port cannot be both a real nginx listen and in `open_ports` (or in the desired set that would be applied). `add` / `open` / `apply` / `apply-central` / `reconcile` compute `real listen ∩ candidates` and refuse the **whole** operation before any map write: `fail-closed`. No partial map writes.
+A port cannot be both a real nginx listen and in `open_ports` (or in the desired set that would be applied). `add` / `open` / `apply` / `apply-central` / `reconcile` / `check-overlap` compute `real listen ∩ candidates` after the same nginx `include` expansion as `import-listens` and refuse the **whole** operation before any map write: `fail-closed`. No partial map writes.
 
 ## Drop listen (separate explicit step)
 
-`migrate --drop-listen` (alias `retire-conf-listen`) is **dry-run only**. It prints the `listen` lines that would be removed. `--apply` is refused; rewrite the conf yourself, then reload. Import never drops listen directives.
+`migrate --drop-listen` (alias `retire-conf-listen`) is **dry-run only**. It prints matching `listen` lines from the expanded include tree (`path:line: text`). `--apply` is refused; rewrite the conf yourself, then reload. Import never drops listen directives.
 
 ## Metrics
 
