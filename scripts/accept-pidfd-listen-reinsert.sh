@@ -83,6 +83,7 @@ port = int(sys.argv[1])
 body = b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\npidfd-ok"
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 s.bind(("127.0.0.1", port))
 s.listen(16)
 print("READY", port, flush=True)
