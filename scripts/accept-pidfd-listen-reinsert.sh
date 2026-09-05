@@ -172,25 +172,35 @@ kill -TERM "$WORKER_PID"
 wait "$WORKER_PID" 2>/dev/null || true
 WORKER_PID=""
 
+echo "--- steered curl while owner dead (expect fail) ---"
+if curl -sS --max-time 1 "http://127.0.0.1:${STEER_PORT}/" 2>/dev/null | grep -q "pidfd-ok"; then
+  echo "FAIL: steered curl still worked after owner death with no replacement" >&2
+  cat "$LOADER_LOG" >&2
+  exit 1
+fi
+
 echo "--- start replacement worker ---"
 start_worker "$LISTEN_PORT"
 
-echo "--- wait for pidfd rescan to re-insert ---"
+echo "--- SIGUSR1 + wait for pidfd rescan to re-insert ---"
 ok=0
 for _ in $(seq 1 40); do
-  if curl -sS --max-time 2 "http://127.0.0.1:${STEER_PORT}/" 2>/dev/null | grep -q "pidfd-ok"; then
+  kill -USR1 "$LOADER_PID" 2>/dev/null || true
+  if grep -E "listen health stale|rescan-listen swapped|listen rescan changed" "$LOADER_LOG"; then
     ok=1
     break
   fi
   sleep 0.1
 done
 if [[ "$ok" -ne 1 ]]; then
-  echo "FAIL: steered port did not recover after worker replace" >&2
+  echo "FAIL: loader log has no pidfd/rescan swap" >&2
   cat "$LOADER_LOG" >&2
   exit 1
 fi
-if ! grep -E "listen health stale|rescan-listen swapped|listen rescan changed" "$LOADER_LOG"; then
-  echo "FAIL: loader log has no pidfd/rescan swap" >&2
+
+echo "--- steered curl after re-insert ---"
+if ! curl -sS --max-time 3 "http://127.0.0.1:${STEER_PORT}/" | grep -q "pidfd-ok"; then
+  echo "FAIL: steered port did not recover after worker replace" >&2
   cat "$LOADER_LOG" >&2
   exit 1
 fi
