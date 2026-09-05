@@ -200,7 +200,8 @@ Established TCP never migrates. Only new SYNs are in scope. This is the
 **main ABI** (u16 `open_ports`, 2-slot SOCKMAP), not the #37 experiment bay.
 
 Details and Test re-run commands: [docs/issue-34-fallback.md](docs/issue-34-fallback.md),
-[docs/specs/SDD-003-atomic-upgrade-and-rollback.md](docs/specs/SDD-003-atomic-upgrade-and-rollback.md).
+[docs/specs/SDD-003-atomic-upgrade-and-rollback.md](docs/specs/SDD-003-atomic-upgrade-and-rollback.md),
+[docs/nft-dnat-fallback.md](docs/nft-dnat-fallback.md).
 
 Optional **last-resort nft DNAT** (SDD-004) is default **OFF** and is never
 started by the loader. Use it only after **both** links are gone:
