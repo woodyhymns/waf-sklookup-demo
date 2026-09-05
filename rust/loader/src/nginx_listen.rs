@@ -236,6 +236,7 @@ pub fn find_listen_hits(root: &Path, wanted: &BTreeSet<u16>) -> Result<Vec<Liste
 
 pub fn skip_reason(port: u16, policy: &Policy, extra_skip: &BTreeSet<u16>) -> Option<&'static str> {
     if port == 80 || port == 443 { return Some("reserved real bind"); }
+    if policy.reserve.contains(&port) { return Some("reserved by policy"); }
     if extra_skip.contains(&port) { return Some("skipped real listen"); }
     if policy.deny.contains(&port) { return Some("denied by policy"); }
     if port <= 1023 && !policy.allow_privileged.contains(&port) { return Some("privileged"); }
@@ -388,6 +389,15 @@ mod tests {
         assert!(real.contains(&80));
         assert!(real.contains(&443));
         assert!(!importable.iter().any(|p| real.contains(p) && [80, 443, 8080, 8443].contains(p)));
+    }
+
+    #[test]
+    fn policy_reserve_skips_import() {
+        let mut policy = Policy::default();
+        policy.reserve.insert(19001);
+        let (ports, skipped) = importable_ports(&[19001, 19002], &policy, &BTreeSet::new());
+        assert_eq!(ports, vec![19002]);
+        assert!(skipped.iter().any(|(p, r)| *p == 19001 && r.contains("reserved")));
     }
 
     #[test]

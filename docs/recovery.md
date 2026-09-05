@@ -14,7 +14,15 @@ the first inode still reachable through `/proc/*/fd`, skipping vanished
 reuseport inodes. `register_listen_fd` swaps the slot, replaces the held fd, and
 drops the stale duplicate. There is no listen sharding.
 
-The loader rescans about every two seconds and on `SIGUSR1`. The root hatch is:
+The loader holds a **pidfd** for the process that owned each inserted listen
+FD. A loader `dup` can keep `SO_ACCEPTCONN` after that worker exits, so inode
+comparison of two dups is not a health check. Rescan treats the owner as dead
+when the pidfd is readable or the owner no longer holds the inode, then
+re-inserts a live listen into the same 2-slot SOCKMAP. Only new SYNs are
+steered; established TCP stays on the accepting fd.
+
+Default interval is **500ms** (`-rescan-interval`, minimum 100ms) and
+`SIGUSR1`. The root hatch is:
 
 ```bash
 sudo waf-sklookup-loader rescan-listen -pin-dir /sys/fs/bpf/waf-sklookup \
@@ -76,7 +84,7 @@ master/listener is actually down, use the frontend-only
 | Primary link detached | Backup link + maps | New SYNs still steered; established TCP stays |
 | Both links unpinned | None (fail-closed) | Optional explicit nft DNAT (SDD-005); default OFF |
 | `upgrade -obj` | Maps + backup | `bpf_link_update` primary; rollback on verify/attach/health fail |
-| OpenResty restart | `open_ports` unchanged | Periodic/`SIGUSR1` rescan swaps listen inode in `redir_socket` only |
+| OpenResty restart | `open_ports` unchanged | pidfd health + periodic/`SIGUSR1` rescan re-inserts live listen FDs only |
 
 Maps-only pin (no `sk_lookup` link) is the **old fail path**: kill loader → steered new SYN refuse. Do not regress.
 

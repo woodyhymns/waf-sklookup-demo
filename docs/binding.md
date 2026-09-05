@@ -26,18 +26,23 @@ By default the loader looks for `policy.conf` beside `ports.conf`. Use `-policy-
 - All privileged ports (1–1023) are denied unless present in `allow_privileged`.
 - A tenant may open at most 32 ports.
 - The machine may open at most 128 ports.
+- `reserve=` is optional and empty when omitted (compat). The repository
+  `policy.conf` reserves 80, 443, 8080, and 8443 so those real/management
+  listens cannot enter `open_ports`. The long-running loader also reserves
+  `-target` / `-tls-target` ports. See [SDD-001](specs/SDD-001-management-plane-and-capacity-safety.md).
 
 Example:
 
 ```text
 # deny additional ports; the five default-denied ports remain denied
 deny=22,25,53,3306,6379
+reserve=80,443,8080,8443
 allow_privileged=
 max_ports_per_tenant=32
 max_ports_per_machine=128
 ```
 
-Repeated `deny=` and `allow_privileged=` lines and comma/range values are accepted. Replacing an existing port number changes its binding without increasing the machine count.
+Repeated `deny=`, `reserve=`, and `allow_privileged=` lines and comma/range values are accepted. Replacing an existing port number changes its binding without increasing the machine count.
 
 ## Commands and enforcement
 

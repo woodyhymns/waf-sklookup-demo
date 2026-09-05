@@ -1,7 +1,12 @@
 //! `-mode openresty`: wait for listen FD, register sockmap slot 0/1.
+//!
+//! Main ABI is a 2-slot SOCKMAP (HTTP + stock TLS fallback), not worker shards.
+//! After a worker exits, a loader-held dup can keep the old socket in LISTEN.
+//! Rescan therefore uses pidfd owner health and re-inserts a live listen FD.
+//! Established TCP stays on the accepting fd; only new SYNs are steered.
 
 use std::net::SocketAddr;
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -10,33 +15,40 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use libbpf_rs::MapCore;
 
-use crate::listen_fd;
+use crate::listen_fd::{self, CapturedListen};
 use crate::load::{open_steered_ports, register_listen_fd};
 use crate::pin::{REDIR_PRIMARY, REDIR_TLS};
-
-fn socket_inode(fd: &OwnedFd) -> Result<u64> {
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
-    if unsafe { libc::fstat(fd.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("fstat listen fd");
-    }
-    Ok(unsafe { stat.assume_init() }.st_ino)
-}
 
 pub fn rescan_slot(
     redir: &dyn MapCore,
     target: &str,
     slot: u32,
-    held: Option<&OwnedFd>,
-) -> Result<Option<OwnedFd>> {
-    let (mut host, port_raw) = split_host_port(target);
-    if host.is_empty() { host = "0.0.0.0".into(); }
-    let port: u16 = port_raw.parse().with_context(|| format!("bad listen port {port_raw:?}"))?;
+    held: Option<&CapturedListen>,
+) -> Result<Option<CapturedListen>> {
+    let (host, port) = split_target(target)?;
+    if let Some(old) = held {
+        let owner_ok = old.owner_still_owns_listener();
+        let accept_ok = listen_fd::fd_is_listening(&old.fd);
+        let inode_ok = listen_fd::inode_still_listening(&host, port, old.inode)?;
+        if owner_ok && accept_ok && inode_ok {
+            return Ok(None);
+        }
+        crate::log_msg(format_args!(
+            "listen health stale redir_socket[{slot}] target={target} inode={} owner_pid={} owner_ok={owner_ok} accept_ok={accept_ok} inode_ok={inode_ok}",
+            old.inode, old.owner_pid
+        ));
+    }
     let fresh = listen_fd::find_listen_socket_file(&host, port)?;
     if let Some(old) = held {
-        if socket_inode(old)? == socket_inode(&fresh)? { return Ok(None); }
+        if old.inode == fresh.inode && old.owner_pid == fresh.owner_pid {
+            return Ok(None);
+        }
     }
-    register_listen_fd(redir, fresh.as_raw_fd(), slot)?;
-    crate::log_msg(format_args!("rescan-listen swapped redir_socket[{slot}] to live {target}"));
+    register_listen_fd(redir, fresh.fd.as_raw_fd(), slot)?;
+    crate::log_msg(format_args!(
+        "rescan-listen swapped redir_socket[{slot}] to live {target} inode={} owner_pid={} (open_ports unchanged; established TCP not migrated)",
+        fresh.inode, fresh.owner_pid
+    ));
     Ok(Some(fresh))
 }
 
@@ -44,16 +56,24 @@ pub fn rescan_held(
     redir: &dyn MapCore,
     target: &str,
     tls_target: Option<&str>,
-    held: &mut Vec<OwnedFd>,
+    held: &mut Vec<CapturedListen>,
 ) -> Result<usize> {
     let mut changed = 0;
     if let Some(fd) = rescan_slot(redir, target, REDIR_PRIMARY, held.first())? {
-        if held.is_empty() { held.push(fd) } else { held[0] = fd };
+        if held.is_empty() {
+            held.push(fd)
+        } else {
+            held[0] = fd
+        };
         changed += 1;
     }
     if let Some(target) = tls_target {
         if let Some(fd) = rescan_slot(redir, target, REDIR_TLS, held.get(1))? {
-            if held.len() < 2 { held.push(fd) } else { held[1] = fd };
+            if held.len() < 2 {
+                held.push(fd)
+            } else {
+                held[1] = fd
+            };
             changed += 1;
         }
     }
@@ -69,7 +89,7 @@ pub fn run_openresty_mode(
     tls_ports: &[u16],
     wait: Duration,
     shutdown: &Arc<AtomicBool>,
-) -> Result<Vec<OwnedFd>> {
+) -> Result<Vec<CapturedListen>> {
     crate::log_msg(format_args!(
         "openresty mode: product path is one internal listen ({target_addr}); sk_lookup does not classify HTTP vs TLS"
     ));
@@ -83,7 +103,7 @@ pub fn run_openresty_mode(
     let http_file = wait_for_listen_socket(target_addr, wait, shutdown)?;
     register_listen_fd(
         redir_socket,
-        http_file.as_raw_fd(),
+        http_file.fd.as_raw_fd(),
         REDIR_PRIMARY,
     )?;
     open_steered_ports(open_ports, steered_ports, REDIR_PRIMARY as u8)?;
@@ -92,7 +112,7 @@ pub fn run_openresty_mode(
     if !tls_ports.is_empty() {
         let tls_file = wait_for_listen_socket(tls_target_addr, wait, shutdown)
             .context("stock TLS fallback listen")?;
-        register_listen_fd(redir_socket, tls_file.as_raw_fd(), REDIR_TLS)?;
+        register_listen_fd(redir_socket, tls_file.fd.as_raw_fd(), REDIR_TLS)?;
         open_steered_ports(open_ports, tls_ports, REDIR_TLS as u8)?;
         held.push(tls_file);
     }
@@ -105,14 +125,8 @@ fn wait_for_listen_socket(
     target_addr: &str,
     wait: Duration,
     shutdown: &Arc<AtomicBool>,
-) -> Result<OwnedFd> {
-    let (mut host, port_str) = split_host_port(target_addr);
-    let port: u16 = port_str
-        .parse()
-        .with_context(|| format!("bad listen port {port_str:?}"))?;
-    if host.is_empty() {
-        host = "0.0.0.0".into();
-    }
+) -> Result<CapturedListen> {
+    let (host, port) = split_target(target_addr)?;
     crate::log_msg(format_args!(
         "waiting for listen socket on {target_addr} (timeout {})",
         crate::bulk::fmt_duration(wait)
@@ -174,6 +188,17 @@ pub fn print_openresty_instructions(
     println!("====================================");
 }
 
+fn split_target(target: &str) -> Result<(String, u16)> {
+    let (mut host, port_raw) = split_host_port(target);
+    if host.is_empty() {
+        host = "0.0.0.0".into();
+    }
+    let port: u16 = port_raw
+        .parse()
+        .with_context(|| format!("bad listen port {port_raw:?}"))?;
+    Ok((host, port))
+}
+
 fn split_host_port(addr: &str) -> (String, String) {
     if let Ok(sa) = addr.parse::<SocketAddr>() {
         return (sa.ip().to_string(), sa.port().to_string());
@@ -190,4 +215,22 @@ fn split_host_port(addr: &str) -> (String, String) {
 #[allow(dead_code)]
 pub fn pin_dir_display(p: &Path) -> String {
     p.display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_target_defaults_to_wildcard_host() {
+        assert_eq!(
+            split_target(":8080").unwrap(),
+            ("0.0.0.0".to_string(), 8080)
+        );
+        assert_eq!(
+            split_target("127.0.0.1:18080").unwrap(),
+            ("127.0.0.1".to_string(), 18080)
+        );
+        assert!(split_target("127.0.0.1:notaport").is_err());
+    }
 }

@@ -199,7 +199,13 @@ window) plus rollback if the candidate fails verify/attach/health.
 Established TCP never migrates. Only new SYNs are in scope. This is the
 **main ABI** (u16 `open_ports`, 2-slot SOCKMAP), not the #37 experiment bay.
 
+After an OpenResty worker restart the loader uses a **pidfd** of the listen
+owner and re-inserts a live FD into `redir_socket` (`-rescan-interval`,
+default 500ms). `status`/`metrics` expose `open_ports` capacity/pressure and
+`policy.conf` `reserve=` (80/443/8080/8443 in the repo file).
+
 Details and Test re-run commands: [docs/issue-34-fallback.md](docs/issue-34-fallback.md),
+[docs/specs/SDD-001-management-plane-and-capacity-safety.md](docs/specs/SDD-001-management-plane-and-capacity-safety.md),
 [docs/specs/SDD-003-atomic-upgrade-and-rollback.md](docs/specs/SDD-003-atomic-upgrade-and-rollback.md),
 [docs/nft-dnat-fallback.md](docs/nft-dnat-fallback.md).
 
@@ -217,6 +223,7 @@ sudo ./scripts/accept-issue-34-detach-primary.sh
 sudo ./scripts/accept-sdd003-upgrade-rollback.sh
 # nft present → PASS; nft absent → SKIP 77
 sudo ./scripts/accept-nft-dnat-fallback.sh
+sudo ./scripts/accept-pidfd-listen-reinsert.sh
 ```
 
 Details: [docs/nft-dnat-fallback.md](docs/nft-dnat-fallback.md).
