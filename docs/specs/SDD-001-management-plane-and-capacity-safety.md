@@ -46,5 +46,9 @@ Host/SNI remains product identity. 80/443 stay real binds.
 ## Test
 
 - Unit: `reserve=` parse/merge, compat empty default, capacity snapshot, status JSON.
+  Run from `rust/loader/` so rust-toolchain 1.85.0 is used.
 - HAH / kernel (optional): `sudo ./scripts/accept-pidfd-listen-reinsert.sh`
-  also exercises reserved-port `add` refuse when the demo policy is loaded.
+  Expect `PIDFD_LISTEN_REINSERT_PASS`. Reserve probe is `add 19099` (not 8080:
+  8080 is an inner real listen and fails on the overlap gate first). Flags
+  must precede the positional port. Pass requires `rescan-listen swapped`,
+  not merely `listen health stale`.
