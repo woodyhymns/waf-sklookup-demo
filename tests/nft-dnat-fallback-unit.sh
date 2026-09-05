@@ -62,5 +62,19 @@ echo "$rules" | grep -Eq 'elements = \{[^}]*\b80\b' && fail "80 in render"
 "$NFT_SH" enable --enable --dry-run --ports 19081 --target 127.0.0.1:19080 \
   | grep -q 'dnat to 127.0.0.1:19080' || fail "dry-run enable render"
 
+fake_pin="$(mktemp -d "${TMPDIR:-/tmp}/nft-unit-pin.XXXXXX")"
+touch "$fake_pin/sk_lookup"
+set +e
+"$NFT_SH" enable --enable --ports 19081 --target 127.0.0.1:19080 --pin-dir "$fake_pin" \
+  >/tmp/nft-unit-pinned.out 2>/tmp/nft-unit-pinned.err
+rc=$?
+set -e
+[[ $rc -ne 0 ]] || fail "enable must refuse while a sk_lookup pin exists"
+grep -q 'last line only\|pin' /tmp/nft-unit-pinned.err || fail "pin-refuse text missing"
+"$NFT_SH" enable --enable --dry-run --force --ports 19081 --target 127.0.0.1:19080 \
+  --pin-dir "$fake_pin" >/tmp/nft-unit-force.out 2>/tmp/nft-unit-force.err || fail "dry-run --force"
+grep -q 'force' /tmp/nft-unit-force.err || fail "--force note missing"
+rm -rf "$fake_pin"
+
 echo "nft-dnat-fallback unit: PASS"
 exit 0

@@ -24,6 +24,7 @@ TARGET="${TARGET_HOST}:${LISTEN_PORT}"
 STARTED_HERE=0
 HOLD_PY=""
 PY_HTTP=""
+PIN_REFUSE="跳过"
 
 install_hygiene_traps
 trap 'cleanup_extra; hygiene_cleanup' EXIT
@@ -143,6 +144,21 @@ echo "$RENDER" | grep -q 'tcp flags syn' || {
 echo "$RENDER" | grep -q "dnat to ${TARGET_HOST}:${LISTEN_PORT}"
 RENDER_OK="通过"
 
+echo "--- refuse enable while a sk_lookup pin exists (no BPF needed) ---"
+FAKE_PIN="$(mktemp -d "${TMPDIR:-/tmp}/nft-dnat-fake-pin.XXXXXX")"
+touch "$FAKE_PIN/sk_lookup" "$FAKE_PIN/sk_lookup_backup"
+set +e
+"$NFT_SH" enable --enable --ports "$VIRT_PORT" --target "$TARGET" --pin-dir "$FAKE_PIN" \
+  >/tmp/nft-dnat-fakepin.out 2>/tmp/nft-dnat-fakepin.err
+FAKE_RC=$?
+set -e
+rm -rf "$FAKE_PIN"
+[[ $FAKE_RC -ne 0 ]] || {
+  echo "FAIL: enable must refuse while sk_lookup pins exist (no --force)" >&2
+  exit 1
+}
+PIN_REFUSE="通过"
+
 echo "--- standalone DNAT: python listen + NEW SYN on virtual port ---"
 "$NFT_SH" disable --table "$NFT_TABLE" >/dev/null
 rm -f /tmp/nft-dnat-http.listen
@@ -228,7 +244,6 @@ PY_HTTP=""
 
 UNPIN_SYN="跳过"
 UNPIN_HOLD="跳过"
-PIN_REFUSE="跳过"
 if [[ "${NFT_ACCEPT_UNPIN:-1}" == "1" ]] && ensure_loader_bin; then
   echo "--- optional: unpin both sk_lookup links, then last-resort nft ---"
   set +e
