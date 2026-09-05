@@ -2,7 +2,7 @@
 
 Optional **third line** after pin-link ([#38](https://github.com/woodyhymns/waf-sklookup-demo/pull/38))
 and backup `sk_lookup` ([#40](https://github.com/woodyhymns/waf-sklookup-demo/pull/40)).
-Spec: [SDD-004](specs/SDD-004-nft-dnat-last-resort.md).
+Spec: [SDD-005](specs/SDD-005-nft-dnat-last-resort.md).
 
 When **both** BPF/`sk_lookup` links are gone, new SYNs to virtual ports have
 no listener. This helper DNATs **NEW TCP SYNs** on those dynamic ports to the

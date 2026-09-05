@@ -24,7 +24,7 @@ Not from [#37](https://github.com/woodyhymns/waf-sklookup-demo/pull/37): no
 | `bpf_link_update` | Loader restart or `upgrade -obj` | No detach window; old program stays if update fails |
 | Backup `sk_lookup_backup` | Primary link detached | Same maps, still `bpf_sk_assign` the listen |
 | Empty SOCKMAP | OpenResty listen gone | `SK_DROP` (inner `:8080` still direct) |
-| Optional nft DNAT (SDD-004) | **Both** links gone; explicit `--enable` only | NEW SYN DNATed to main listen; established TCP stays |
+| Optional nft DNAT (SDD-005) | **Both** links gone; explicit `--enable` only | NEW SYN DNATed to main listen; established TCP stays |
 
 nftables is last-resort only ([nft-dnat-fallback.md](nft-dnat-fallback.md)).
 Default **OFF**. Never auto-enabled by pin-link, backup, `unpin`, or systemd.
@@ -64,7 +64,7 @@ sudo ./scripts/accept-issue-34-detach-primary.sh
 # SDD-003: same-object upgrade commit + health-fail rollback; steered SYN stays 200
 sudo ./scripts/accept-sdd003-upgrade-rollback.sh
 
-# SDD-004: last-resort nft DNAT (SKIP 77 if nft absent; PASS when present)
+# SDD-005: last-resort nft DNAT (SKIP 77 if nft absent; PASS when present)
 sudo ./scripts/accept-nft-dnat-fallback.sh
 ./tests/nft-dnat-fallback-unit.sh
 ```

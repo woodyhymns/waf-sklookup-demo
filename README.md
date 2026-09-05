@@ -203,7 +203,7 @@ Details and Test re-run commands: [docs/issue-34-fallback.md](docs/issue-34-fall
 [docs/specs/SDD-003-atomic-upgrade-and-rollback.md](docs/specs/SDD-003-atomic-upgrade-and-rollback.md),
 [docs/nft-dnat-fallback.md](docs/nft-dnat-fallback.md).
 
-Optional **last-resort nft DNAT** (SDD-004) is default **OFF** and is never
+Optional **last-resort nft DNAT** (SDD-005) is default **OFF** and is never
 started by the loader. Use it only after **both** links are gone:
 
 ```bash
@@ -249,9 +249,9 @@ Details: [docs/nft-dnat-fallback.md](docs/nft-dnat-fallback.md).
 | `deploy/systemd/`, `docs/systemd.md` | Operator systemd units, environment examples, fail-closed policy, and installation guide |
 | `scripts/check-install.sh` | Read-only kernel, BPF, bpffs, privilege, loader, and OpenResty installation checks |
 | `docs/issue-34-fallback.md` | #34 leftover: pin-link, backup `sk_lookup`, SDD-003 upgrade/rollback |
-| `docs/nft-dnat-fallback.md` | SDD-004 last-resort nft DNAT (default OFF) |
+| `docs/nft-dnat-fallback.md` | SDD-005 last-resort nft DNAT (default OFF) |
 | `docs/specs/SDD-003-atomic-upgrade-and-rollback.md` | Main-ABI upgrade transaction (not #37) |
-| `docs/specs/SDD-004-nft-dnat-last-resort.md` | Optional nft when both `sk_lookup` links are gone |
+| `docs/specs/SDD-005-nft-dnat-last-resort.md` | Optional nft when both `sk_lookup` links are gone |
 | `scripts/nft-dnat-fallback.sh` | Enable/disable/status/render for last-resort DNAT |
 | `scripts/accept-issue-34-kill-loader.sh` | Kill loader; new SYN still 200 |
 | `scripts/accept-issue-34-detach-primary.sh` | Detach primary; backup steers; established TCP stays |

@@ -25,7 +25,7 @@ The loader uses `Restart=on-failure`, a two-second delay, and a three-failures-i
 
 The supplied `[Install]` sections are for deliberate operator installation. Merely keeping these files in the repository does not activate anything.
 
-Last-resort nft DNAT (SDD-004) is **not** wired into these units. Do not set
+Last-resort nft DNAT (SDD-005) is **not** wired into these units. Do not set
 `WAF_NFT_FALLBACK=1` in the environment file. If both `sk_lookup` links are
 gone, an operator may run `scripts/nft-dnat-fallback.sh enable --enable`
 by hand; see [nft-dnat-fallback.md](nft-dnat-fallback.md).

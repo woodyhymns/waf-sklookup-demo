@@ -1,4 +1,4 @@
-# SDD-004: optional last-resort nftables DNAT
+# SDD-005: optional last-resort nftables DNAT
 
 **Status:** Implemented as scripts + docs. Default **OFF**.
 **Parent:** leftover of [#34](https://github.com/woodyhymns/waf-sklookup-demo/issues/34) after pin-link [#38](https://github.com/woodyhymns/waf-sklookup-demo/pull/38) and backup `sk_lookup` [#40](https://github.com/woodyhymns/waf-sklookup-demo/pull/40).
