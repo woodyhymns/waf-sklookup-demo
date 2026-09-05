@@ -1,0 +1,11 @@
+# Specs (main ABI)
+
+This directory is the source of product requirements that land on **main**.
+Implementations must cite an SDD number. Do **not** import ABI-breaking
+shapes from the #37 experiment bay (64-shard, 20-byte dest key, IPv6 key).
+
+| SDD | Topic | Status |
+|---|---|---|
+| [SDD-003](SDD-003-atomic-upgrade-and-rollback.md) | Single-node `sk_lookup` program replace via `bpf_link_update`, ABI preflight, health window, rollback; backup link for primary detach | Implemented on main ABI (u16 `open_ports`, 2-slot SOCKMAP) |
+
+Related product notes: [issue-34-fallback.md](../issue-34-fallback.md), [recovery.md](../recovery.md).
