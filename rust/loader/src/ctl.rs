@@ -322,6 +322,12 @@ pub(crate) fn status_value_with_stamp(nginx_conf: &Path, ports_file: &Path, poli
     let plan = desired::plan(&desired, &map);
     let drift_put = plan.put_primary.len() + plan.put_tls.len();
     let drift_delete = plan.delete.len();
+    let cap = crate::metrics::capacity_snapshot(map.len());
+    let reserved: Vec<u16> = crate::policy::load(policy_file)
+        .unwrap_or_default()
+        .reserve
+        .into_iter()
+        .collect();
     Ok(serde_json::json!({
         "real": real.iter().copied().collect::<Vec<_>>(), "virtual": virtual_ports,
         "overlap": overlap_ports, "frozen": freeze_file.exists(), "desired_count": desired.len(),
@@ -332,7 +338,12 @@ pub(crate) fn status_value_with_stamp(nginx_conf: &Path, ports_file: &Path, poli
         "conflict_count": candidates.intersection(&real).count(),
         "drift": {"put": drift_put, "delete": drift_delete},
         "last_apply_central": crate::metrics::read_apply_stamp(apply_stamp),
-        "apply_fail_total": crate::metrics::read(metrics_file)
+        "apply_fail_total": crate::metrics::read(metrics_file),
+        "open_ports_entries": cap.entries,
+        "open_ports_max_entries": cap.max_entries,
+        "open_ports_pressure_ratio": cap.pressure_ratio,
+        "open_ports_headroom_entries": cap.headroom_entries,
+        "reserved": reserved
     }))
 }
 
@@ -1088,6 +1099,24 @@ mod tests {
         assert_eq!(v["drift"]["delete"], 0);
         assert!(v["last_apply_central"].is_null());
         assert_eq!(v["frozen"], false);
+        assert_eq!(v["open_ports_entries"], 0);
+        assert_eq!(v["open_ports_max_entries"], crate::pin::OPEN_PORTS_MAX_ENTRIES);
+        assert_eq!(v["open_ports_headroom_entries"], crate::pin::OPEN_PORTS_MAX_ENTRIES);
+        assert_eq!(v["open_ports_pressure_ratio"], 0.0);
+        assert_eq!(v["reserved"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn status_exposes_policy_reserve() {
+        let (dir, ports, policy, nginx, pin, metrics) = fixture();
+        fs::write(&policy, "allow_privileged=\nmax_ports_per_tenant=32\nmax_ports_per_machine=128\nreserve=8080,8443,9101\n").unwrap();
+        fs::write(&nginx, "listen 8080;\n").unwrap();
+        fs::write(&ports, "# desired open_ports\n18081 acme www\n").unwrap();
+        let v = status_value(&nginx, &ports, &policy, &pin, &dir.join("frozen"), &metrics).unwrap();
+        let reserved = v["reserved"].as_array().unwrap();
+        assert!(reserved.contains(&serde_json::json!(8080)));
+        assert!(reserved.contains(&serde_json::json!(8443)));
+        assert!(reserved.contains(&serde_json::json!(9101)));
     }
 
     #[test]

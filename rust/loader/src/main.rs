@@ -162,8 +162,16 @@ fn acquire_loader_lock() -> Result<std::fs::File> {
 fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs) -> Result<()> {
     let _pin_lock = acquire_loader_lock()?;
     let policy_file = args.policy_file.clone().unwrap_or_else(|| policy::default_path(&args.ports_file));
+    let mut policy = policy::load(&policy_file)?;
+    if matches!(args.mode, RunMode::OpenResty) {
+        policy::reserve_listen_target(&mut policy, &args.target);
+        policy::reserve_listen_target(&mut policy, &args.tls_target);
+    }
     let desired = if args.ports_file.exists() {
-        let state = desired::load_with_policy(&args.ports_file, &policy_file)?;
+        let file = std::fs::File::open(&args.ports_file)
+            .with_context(|| format!("open desired ports file {}", args.ports_file.display()))?;
+        let state = desired::load_from_reader_with_policy(file, &policy)
+            .with_context(|| format!("read desired ports file {}", args.ports_file.display()))?;
         log_msg(format_args!(
             "loaded desired ports from {}",
             args.ports_file.display()
@@ -182,7 +190,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
             binding.cert.clone_from(&args.cert);
             binding.policy.clone_from(&args.policy);
         }
-        policy::validate(&state, &policy::load(&policy_file)?)?;
+        policy::validate(&state, &policy)?;
         desired::write(&args.ports_file, &state)?;
         log_msg(format_args!(
             "seeded missing desired ports file {} from -ports/-tls-ports",
@@ -214,7 +222,8 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
     signal_hook::flag::register(signal_hook::consts::SIGUSR1, Arc::clone(&rescan))?;
 
     // Hold listen FDs so SOCKMAP entries stay valid (same as Go keeping *os.File).
-    let mut held_fds = Vec::new();
+    let mut toy_held = None;
+    let mut held_listens = Vec::new();
     match args.mode {
         RunMode::Toy => {
             let fd = bpf.with_maps(|open_ports, redir_socket| {
@@ -230,7 +239,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
                     "toy mode maps desired `tls` entries to its HTTP socket"
                 ));
             }
-            held_fds.push(fd);
+            toy_held = Some(fd);
         }
         RunMode::OpenResty => {
             let fds = bpf.with_maps(|open_ports, redir_socket| {
@@ -239,7 +248,11 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
                     &tls_ports, args.wait, &shutdown,
                 )
             })?;
-            held_fds.extend(fds);
+            held_listens.extend(fds);
+            log_msg(format_args!(
+                "OpenResty worker/loader listen health interval={} (pidfd owner check; SIGUSR1 triggers an immediate rescan)",
+                crate::bulk::fmt_duration(args.rescan_interval)
+            ));
         }
         RunMode::ClosePort | RunMode::OpenPort | RunMode::DumpPorts => {
             unreachable!("attached path")
@@ -278,7 +291,7 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         }
     };
 
-    let mut next_rescan = std::time::Instant::now() + Duration::from_secs(2);
+    let mut next_rescan = std::time::Instant::now() + args.rescan_interval;
     while !shutdown.load(Ordering::SeqCst) {
         if reload.swap(false, Ordering::SeqCst) {
             let _guard = mutations.lock().map_err(|_| anyhow::anyhow!("mutation lock poisoned"))?;
@@ -299,18 +312,20 @@ fn run_attached(open_object: &mut MaybeUninit<OpenObject>, args: LongRunningArgs
         {
             let tls = (!tls_ports.is_empty()).then_some(args.tls_target.as_str());
             match bpf.with_maps(|_open_ports, redir_socket| {
-                openresty::rescan_held(redir_socket, &args.target, tls, &mut held_fds)
+                openresty::rescan_held(redir_socket, &args.target, tls, &mut held_listens)
             }) {
                 Ok(n) if n > 0 => log_msg(format_args!(
-                    "listen rescan changed {n} slot(s); open_ports unchanged"
+                    "listen rescan changed {n} slot(s); open_ports unchanged; established TCP not migrated"
                 )),
                 Ok(_) => {}
                 Err(err) => log_msg(format_args!("listen rescan failed (will retry): {err:#}")),
             }
-            next_rescan = std::time::Instant::now() + Duration::from_secs(2);
+            next_rescan = std::time::Instant::now() + args.rescan_interval;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(50).min(args.rescan_interval));
     }
+    drop(toy_held);
+    drop(held_listens);
     if matches!(args.mode, RunMode::OpenResty) {
         log_msg(format_args!(
             "shutting down loader (OpenResty keeps running)"

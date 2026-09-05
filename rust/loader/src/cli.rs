@@ -67,7 +67,11 @@ pub struct LongRunningArgs {
     pub policy: Option<String>,
     pub ctl_sock: Option<PathBuf>,
     pub ctl_group: Option<u32>,
+    pub rescan_interval: Duration,
 }
+
+pub const DEFAULT_RESCAN_INTERVAL: Duration = Duration::from_millis(500);
+pub const MIN_RESCAN_INTERVAL: Duration = Duration::from_millis(100);
 
 pub fn is_ctl_command(s: &str) -> bool {
     matches!(
@@ -230,6 +234,7 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
             "ctl-sock",
             "ctl-group",
             "bpf",
+            "rescan-interval",
         ],
     )?;
     if flags.bool_flag("help") {
@@ -248,6 +253,15 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
     });
     let ctl_group = flags.get("ctl-group").map(str::parse).transpose()
         .context("bad -ctl-group (numeric gid required)")?;
+    let rescan_interval = if let Some(raw) = flags.get("rescan-interval") {
+        let interval = parse_duration(raw).with_context(|| format!("bad -rescan-interval {raw:?}"))?;
+        if interval < MIN_RESCAN_INTERVAL {
+            bail!("-rescan-interval {raw} is below the 100ms minimum");
+        }
+        interval
+    } else {
+        DEFAULT_RESCAN_INTERVAL
+    };
     Ok(LongRunningArgs {
         bpf_impl: BpfImpl::parse(&bpf_raw)?,
         mode,
@@ -274,6 +288,7 @@ pub fn parse_long_running(argv: &[String]) -> Result<LongRunningArgs> {
         policy: flags.get("policy").map(str::to_owned),
         ctl_sock: (!flags.bool_flag("no-ctl") && !ctl_raw.is_empty()).then(|| PathBuf::from(ctl_raw)),
         ctl_group,
+        rescan_interval,
     })
 }
 
@@ -349,6 +364,7 @@ pub fn print_long_running_usage() {
            -cert string, -policy string\n        optional stored binding identifiers\n\
            -ctl-sock string\n        authenticated Unix control socket (default \"/run/waf-sklookup/ctl.sock\"; empty disables)\n\
            -ctl-group uint\n        optional numeric group owner for the control socket\n\
+           -rescan-interval duration\n        OpenResty listen/pidfd health interval (default \"500ms\", min 100ms)\n\
            -no-ctl\n        disable the Unix control socket\n\n",
         pad = "       "
     );
@@ -440,5 +456,19 @@ mod tests {
         assert_eq!(parse_long_running(&args).unwrap().bpf_impl, BpfImpl::C);
         std::env::remove_var("BPF_IMPL");
         assert!(parse_long_running(&["-bpf=wat".into()]).is_err());
+    }
+
+    #[test]
+    fn rescan_interval_default_and_floor() {
+        assert_eq!(
+            parse_long_running(&[]).unwrap().rescan_interval,
+            DEFAULT_RESCAN_INTERVAL
+        );
+        let ok = parse_long_running(&["-rescan-interval".into(), "200ms".into()]).unwrap();
+        assert_eq!(ok.rescan_interval, Duration::from_millis(200));
+        assert!(parse_long_running(&["-rescan-interval=50ms".into()])
+            .unwrap_err()
+            .to_string()
+            .contains("minimum"));
     }
 }
