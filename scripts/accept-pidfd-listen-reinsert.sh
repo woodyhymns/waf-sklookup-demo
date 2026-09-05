@@ -80,7 +80,7 @@ start_worker() {
   python3 - "$port" <<'PY' >>"$WORKER_LOG" 2>&1 &
 import socket, sys
 port = int(sys.argv[1])
-body = b"HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\npidfd worker OK"
+body = b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\npidfd-ok"
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(("127.0.0.1", port))
@@ -140,9 +140,13 @@ grep -q "OPENRESTY P1 READY" "$LOADER_LOG" || {
   exit 1
 }
 
+echo "--- local worker sanity ---"
+curl -sS --max-time 3 "http://127.0.0.1:${LISTEN_PORT}/" | tee "$WORK/local.body"
+grep -q "pidfd-ok" "$WORK/local.body"
+
 echo "--- baseline steered curl ---"
 curl -sS --max-time 3 "http://127.0.0.1:${STEER_PORT}/" | tee "$WORK/base.body"
-grep -q "pidfd worker OK" "$WORK/base.body"
+grep -q "pidfd-ok" "$WORK/base.body"
 
 echo "--- reserve= refuses inner listen ---"
 if "$LOADER_BIN" add 8080 -tenant demo -site local \
@@ -167,7 +171,7 @@ start_worker "$LISTEN_PORT"
 echo "--- wait for pidfd rescan to re-insert ---"
 ok=0
 for _ in $(seq 1 40); do
-  if curl -sS --max-time 2 "http://127.0.0.1:${STEER_PORT}/" 2>/dev/null | grep -q "pidfd worker OK"; then
+  if curl -sS --max-time 2 "http://127.0.0.1:${STEER_PORT}/" 2>/dev/null | grep -q "pidfd-ok"; then
     ok=1
     break
   fi
