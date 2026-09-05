@@ -182,28 +182,27 @@ fi
 echo "--- start replacement worker ---"
 start_worker "$LISTEN_PORT"
 
-echo "--- SIGUSR1 + wait for pidfd rescan to re-insert ---"
+echo "--- SIGUSR1 + wait for pidfd SOCKMAP re-insert ---"
+# Health-stale alone is not enough: SO_REUSEPORT can answer before SOCKMAP swaps.
 ok=0
-for _ in $(seq 1 40); do
+for _ in $(seq 1 50); do
   kill -USR1 "$LOADER_PID" 2>/dev/null || true
-  if grep -E "listen health stale|rescan-listen swapped|listen rescan changed" "$LOADER_LOG"; then
+  if grep -E "rescan-listen swapped|listen rescan changed" "$LOADER_LOG"; then
     ok=1
     break
   fi
   sleep 0.1
 done
 if [[ "$ok" -ne 1 ]]; then
-  echo "FAIL: loader log has no pidfd/rescan swap" >&2
+  echo "FAIL: loader log has no SOCKMAP re-insert (swapped/changed)" >&2
   cat "$LOADER_LOG" >&2
   exit 1
 fi
+grep -E "listen health stale|rescan-listen swapped|listen rescan changed" "$LOADER_LOG"
 
 echo "--- steered curl after re-insert ---"
-if ! curl -sS --max-time 3 "http://127.0.0.1:${STEER_PORT}/" | grep -q "pidfd-ok"; then
-  echo "FAIL: steered port did not recover after worker replace" >&2
-  cat "$LOADER_LOG" >&2
-  exit 1
-fi
+curl -sS --max-time 3 "http://127.0.0.1:${STEER_PORT}/" | tee "$WORK/after.body"
+grep -q "pidfd-ok" "$WORK/after.body"
 
 echo "--- status capacity fields ---"
 "$LOADER_BIN" status -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" \
