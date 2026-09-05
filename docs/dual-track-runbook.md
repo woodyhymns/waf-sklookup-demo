@@ -47,8 +47,9 @@ Expected: `overlap: none` when `ports.conf` has no bindings that intersect real 
 Preview which include files still have real `listen` lines (dry-run only; does not write):
 
 ```bash
-sudo ./rust/loader/target/release/waf-sklookup-loader retire-conf-listen 19003 \
-  -nginx-conf /path/to/nginx.conf
+sudo ./rust/loader/target/release/waf-sklookup-loader retire-conf-listen \
+  -nginx-conf /path/to/nginx.conf \
+  19003
 ```
 
 Expected: a line such as `conf.d/nested/more.conf:3:     listen 127.0.0.1:19003;`. Omit the port argument to list every importable listen across the include tree.
