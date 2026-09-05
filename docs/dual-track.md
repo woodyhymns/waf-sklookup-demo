@@ -44,3 +44,7 @@ A port cannot be both a real nginx listen and in `open_ports` (or in the desired
 ```
 
 `list -virtual` prints a table that marks each port `kind=virtual`, `kind=real`, or `kind=conflict`.
+
+## Machine-side dry-run runbook
+
+See [dual-track-runbook.md](dual-track-runbook.md) for the issue #30 workflow: `import-listens --dry-run` → `check-overlap` → manual nginx edits → reload → `list -virtual` / `status`. That procedure was verified against a product-shaped fixture only, not on a live product host.
