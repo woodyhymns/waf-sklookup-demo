@@ -27,11 +27,11 @@ sudo ./rust/loader/target/release/waf-sklookup-loader import-listens --dry-run \
   -policy-file /path/to/policy.conf
 ```
 
-Expected: non-standard listens from included conf (e.g. 18081, 18082, 19001, 19002) listed under `import=`; reserved 80/443/8080/8443 under `skipped=`. **`ports.conf` must not be created or modified.**
+Expected: non-standard listens from included conf (e.g. 19001, 19002, 19003, 18081, 9000, 18082, 18443) listed under `import=` in discovery order; reserved 80/443/8080/8443 under `skipped=`. **`ports.conf` must not be created or modified.**
 
 ## Step 2 — check overlap
 
-With desired empty (or after a deliberate reset), confirm no virtual/real overlap:
+With desired empty (or after a deliberate reset), confirm no virtual/real overlap. `check-overlap` expands `include` the same way `import-listens` does, so a binding for a nested-include port (e.g. 19003 from `conf.d/nested/more.conf`) is still a real listen until the operator edits that file:
 
 ```bash
 sudo ./rust/loader/target/release/waf-sklookup-loader check-overlap \
@@ -40,11 +40,20 @@ sudo ./rust/loader/target/release/waf-sklookup-loader check-overlap \
   -policy-file /path/to/policy.conf
 ```
 
-Expected: `overlap: none` when `ports.conf` has no bindings that intersect real nginx listens.
+Expected: `overlap: none` when `ports.conf` has no bindings that intersect real nginx listens. If desired still lists an included listen, the command fails closed and prints `path:line: listen ...` for each hit.
 
 ## Step 3 — operator edits nginx (manual)
 
-Remove or retire real `listen` lines for ports that will become virtual **yourself**. Do not use loader conf rewrite:
+Preview which include files still have real `listen` lines (dry-run only; does not write):
+
+```bash
+sudo ./rust/loader/target/release/waf-sklookup-loader retire-conf-listen 19003 \
+  -nginx-conf /path/to/nginx.conf
+```
+
+Expected: a line such as `conf.d/nested/more.conf:3:     listen 127.0.0.1:19003;`. Omit the port argument to list every importable listen across the include tree.
+
+Remove or retire those lines **yourself**. Do not use loader conf rewrite:
 
 - `migrate --drop-listen` and `retire-conf-listen` are **dry-run only**.
 - `--apply` on those commands is **hard rejected**.
@@ -87,7 +96,7 @@ JSON should show `overlap_count: 0` and virtual ports absent from `real`.
 
 ## Fixture used for verification (not live product)
 
-Repository fixture: `tests/fixtures/issue-30-product-nginx/` (main `nginx.conf` + `conf.d/` + `sites-enabled/`). Manual dry-run fixture may also exist at `/tmp/waf-issue30-fixture` on dev machines.
+Repository fixture: `tests/fixtures/issue-30-product-nginx/` (main `nginx.conf` + `conf.d/*.conf` → `conf.d/nested/more.conf` + `sites-enabled/*`). It mirrors product-shaped includes (19001/19002/19003/18081/9000/18082/18443) without a live customer `nginx.conf`. Manual dry-run fixture may also exist at `/tmp/waf-issue30-fixture` on dev machines.
 
 ## Explicit non-goals on product
 
