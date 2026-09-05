@@ -150,9 +150,10 @@ grep -q "pidfd-ok" "$WORK/base.body"
 
 echo "--- reserve= refuses non-inner reserved port ---"
 # 8080 is also an inner real listen; overlap fails first. 19099 is reserve-only.
-if "$LOADER_BIN" add 19099 -tenant demo -site local \
+if "$LOADER_BIN" add -tenant demo -site local \
     -pin-dir "$PIN_DIR" -ports-file "$PORTS_FILE" -policy-file "$POLICY_FILE" \
     -nginx-conf "$NGINX_CONF" \
+    19099 \
     >"$WORK/reserve.out" 2>"$WORK/reserve.err"; then
   echo "FAIL: add 19099 should be reserved" >&2
   cat "$WORK/reserve.out" "$WORK/reserve.err" >&2
