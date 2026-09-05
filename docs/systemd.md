@@ -24,3 +24,8 @@ The loader uses `Restart=on-failure`, a two-second delay, and a three-failures-i
 `PORTS_FILE` defaults to the absolute repository-root `ports.conf`, and `ExecStart` always passes `-ports-file`. The loader reconciles `open_ports` from it at startup. Edit that file and send `SIGHUP` (`systemctl reload waf-sklookup-loader`) to reconcile it without reloading OpenResty; the E1 `reconcile`/`apply` commands continue to work too.
 
 The supplied `[Install]` sections are for deliberate operator installation. Merely keeping these files in the repository does not activate anything.
+
+Last-resort nft DNAT (SDD-005) is **not** wired into these units. Do not set
+`WAF_NFT_FALLBACK=1` in the environment file. If both `sk_lookup` links are
+gone, an operator may run `scripts/nft-dnat-fallback.sh enable --enable`
+by hand; see [nft-dnat-fallback.md](nft-dnat-fallback.md).

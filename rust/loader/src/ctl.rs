@@ -47,6 +47,10 @@ Root CLI escape hatch (pinned open_ports; no OpenResty reload):
   sudo ./waf-sklookup-loader upgrade-status|upgrade-rollback [-pin-dir DIR]
   sudo ./waf-sklookup-loader detach-primary [-pin-dir DIR]   # test/ops: drop primary link; backup steers new SYNs
 
+Last-resort nft DNAT is default OFF and is never started by this binary:
+  sudo ./scripts/nft-dnat-fallback.sh enable --enable   # only after both sk_lookup pins are gone
+  sudo ./scripts/nft-dnat-fallback.sh disable
+
 Mutating commands update the desired file (default ports.conf) and the pinned map.
   Pass -no-file to edit the live map only (test/hygiene overlay; next reconcile restores the file).
 
@@ -138,7 +142,7 @@ fn ctl_unpin(args: &[String]) -> Result<()> {
     let dir = pin_dir_of(&flags);
     pin::unpin_dataplane(&dir)?;
     println!(
-        "unpin: detached primary+backup sk_lookup links and removed pins under {}",
+        "unpin: detached primary+backup sk_lookup links and removed pins under {}; nft DNAT last-resort stays off (see scripts/nft-dnat-fallback.sh)",
         dir.display()
     );
     Ok(())

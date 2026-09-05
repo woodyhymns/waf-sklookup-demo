@@ -65,6 +65,7 @@ master/listener is actually down, use the frontend-only
 - Recover: `sudo -E scripts/recover.sh loader` (restarts loader; reuses pinned maps and runs `bpf_link_update` on the pinned **primary** link; backup pin is reused as-is).
 - Install teardown only: `sudo waf-sklookup-loader unpin -pin-dir /sys/fs/bpf/waf-sklookup` (detach **both** links + remove bpffs pins).
 - Confirm: loader and `ctl.sock` exist after restart, pins include `sk_lookup` + `sk_lookup_backup` + both maps, file/map agree, and steered probes pass. Acceptance: `sudo ./scripts/accept-issue-34-kill-loader.sh`, `sudo ./scripts/accept-issue-34-detach-primary.sh`, `sudo ./scripts/accept-sdd003-upgrade-rollback.sh`. See [issue-34-fallback.md](issue-34-fallback.md). Do not migrate established connections.
+- **Last-resort nft (SDD-005):** only if **both** links are gone and an operator passes `--enable` / `WAF_NFT_FALLBACK=1`. Recovery never installs nft. See [nft-dnat-fallback.md](nft-dnat-fallback.md).
 
 ### Pinned link, loader restart, OpenResty restart
 
@@ -73,6 +74,7 @@ master/listener is actually down, use the frontend-only
 | Loader kill/crash | Pinned primary + backup `sk_lookup` links + maps | None required for dataplane; optional `recover.sh loader` |
 | Loader restart | Same pins | Reuse maps, `bpf_link_update` on **primary** only, backup reused, rescan listen → SOCKMAP |
 | Primary link detached | Backup link + maps | New SYNs still steered; established TCP stays |
+| Both links unpinned | None (fail-closed) | Optional explicit nft DNAT (SDD-005); default OFF |
 | `upgrade -obj` | Maps + backup | `bpf_link_update` primary; rollback on verify/attach/health fail |
 | OpenResty restart | `open_ports` unchanged | Periodic/`SIGUSR1` rescan swaps listen inode in `redir_socket` only |
 
@@ -123,6 +125,10 @@ Maps-only pin (no `sk_lookup` link) is the **old fail path**: kill loader → st
 - Confirm: bpffs is mounted, both maps are pinned, attachment is live, and file
   state is reconciled. The helper never intentionally leaves an empty
   attachment. Do not migrate established connections.
+- If **both** `sk_lookup` and `sk_lookup_backup` are gone and new virtual SYNs
+  must be accepted before BPF is restored: optional last-resort nft DNAT
+  (`scripts/nft-dnat-fallback.sh enable --enable`). Recovery does **not**
+  enable it. See [nft-dnat-fallback.md](nft-dnat-fallback.md).
 
 ## 7. Sockmap slot empty
 

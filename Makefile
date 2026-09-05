@@ -1,4 +1,5 @@
 .PHONY: generate build run run-toy run-openresty verify-openresty stop-openresty test clean certs \
+	accept-nft-dnat-fallback \
 	httpbench rust-loader rust-loader-test rust-bpf \
 	httpbench accept-prod-p0 accept-prod-p0-cps-tls accept-prod-p0-long-p99 \
 	accept-prod-p0-loader-lifecycle accept-prod-p0-hot-ports \
@@ -19,6 +20,12 @@ httpbench:
 
 test:
 	cargo test --manifest-path rust/loader/Cargo.toml
+	chmod +x tests/nft-dnat-fallback-unit.sh scripts/nft-dnat-fallback.sh
+	./tests/nft-dnat-fallback-unit.sh
+
+accept-nft-dnat-fallback:
+	chmod +x scripts/accept-nft-dnat-fallback.sh scripts/nft-dnat-fallback.sh scripts/lib-prod-gng.sh
+	./scripts/accept-nft-dnat-fallback.sh
 
 # Rust userspace loader (C BPF unchanged); rustc 1.85+.
 rust-loader: build

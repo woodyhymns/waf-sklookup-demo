@@ -89,6 +89,10 @@ hygiene_cleanup() {
     sudo find "$PIN_DIR" -mindepth 1 -maxdepth 1 -delete >/dev/null 2>&1 || true
     sudo rmdir "$PIN_DIR" >/dev/null 2>&1 || true
   fi
+  # Last-resort nft table is opt-in; never leave it on a shared box after tests.
+  if command -v nft >/dev/null 2>&1; then
+    sudo nft delete table inet waf_sklookup_dnat >/dev/null 2>&1 || true
+  fi
   return "$rc"
 }
 

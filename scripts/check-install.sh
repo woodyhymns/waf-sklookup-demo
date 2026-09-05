@@ -94,6 +94,12 @@ else
 fi
 [[ -n "$openresty_bin" ]] && ok "OpenResty binary is executable: $openresty_bin"
 
+if command -v nft >/dev/null 2>&1; then
+  warn "nft is present; last-resort DNAT stays OFF unless scripts/nft-dnat-fallback.sh enable --enable"
+else
+  warn "nft is missing; SDD-005 last-resort DNAT unavailable (accept-nft-dnat-fallback.sh exits 77)"
+fi
+
 if (( failures == 0 )); then
   printf 'SUMMARY: all install checks passed\n'
   exit 0
